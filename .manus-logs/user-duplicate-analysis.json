@@ -1,0 +1,248 @@
+{
+  "totals": {
+    "totalUsers": 5439,
+    "activeUsers": "5439",
+    "distinctOpenIds": 1,
+    "distinctUsernames": 0,
+    "adminUsers": "5439"
+  },
+  "roles": [
+    {
+      "role": "admin",
+      "total": 5439,
+      "active": "5439"
+    }
+  ],
+  "duplicateOpenIds": [
+    {
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "cnt": 5439,
+      "oldestId": 1,
+      "newestId": 1050040
+    }
+  ],
+  "duplicateUsernames": [],
+  "recentAdmins": [
+    {
+      "id": 1050040,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:13:35.000Z",
+      "lastSignedIn": "2026-04-04T05:13:35.000Z"
+    },
+    {
+      "id": 1050039,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:13:29.000Z",
+      "lastSignedIn": "2026-04-04T05:13:29.000Z"
+    },
+    {
+      "id": 1050038,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:13:08.000Z",
+      "lastSignedIn": "2026-04-04T05:13:08.000Z"
+    },
+    {
+      "id": 1050037,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:13:02.000Z",
+      "lastSignedIn": "2026-04-04T05:13:02.000Z"
+    },
+    {
+      "id": 1050036,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:10:36.000Z",
+      "lastSignedIn": "2026-04-04T05:10:36.000Z"
+    },
+    {
+      "id": 1050035,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:10:27.000Z",
+      "lastSignedIn": "2026-04-04T05:10:27.000Z"
+    },
+    {
+      "id": 1050034,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:09:04.000Z",
+      "lastSignedIn": "2026-04-04T05:09:04.000Z"
+    },
+    {
+      "id": 1050033,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:08:54.000Z",
+      "lastSignedIn": "2026-04-04T05:08:54.000Z"
+    },
+    {
+      "id": 1050032,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:08:50.000Z",
+      "lastSignedIn": "2026-04-04T05:08:50.000Z"
+    },
+    {
+      "id": 1050031,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:08:02.000Z",
+      "lastSignedIn": "2026-04-04T05:08:02.000Z"
+    },
+    {
+      "id": 1050030,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:56.000Z",
+      "lastSignedIn": "2026-04-04T05:07:56.000Z"
+    },
+    {
+      "id": 1050029,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:51.000Z",
+      "lastSignedIn": "2026-04-04T05:07:51.000Z"
+    },
+    {
+      "id": 1050028,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:50.000Z",
+      "lastSignedIn": "2026-04-04T05:07:50.000Z"
+    },
+    {
+      "id": 1050027,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:47.000Z",
+      "lastSignedIn": "2026-04-04T05:07:47.000Z"
+    },
+    {
+      "id": 1050026,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:45.000Z",
+      "lastSignedIn": "2026-04-04T05:07:45.000Z"
+    },
+    {
+      "id": 1050025,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:34.000Z",
+      "lastSignedIn": "2026-04-04T05:07:34.000Z"
+    },
+    {
+      "id": 1050024,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:31.000Z",
+      "lastSignedIn": "2026-04-04T05:07:31.000Z"
+    },
+    {
+      "id": 1050023,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:29.000Z",
+      "lastSignedIn": "2026-04-04T05:07:29.000Z"
+    },
+    {
+      "id": 1050022,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:07:27.000Z",
+      "lastSignedIn": "2026-04-04T05:07:27.000Z"
+    },
+    {
+      "id": 1050021,
+      "openId": "775Y5tJafbxvkdHQfE9oL3",
+      "username": null,
+      "name": null,
+      "role": "admin",
+      "isActive": 1,
+      "createdAt": "2026-04-04T05:06:58.000Z",
+      "lastSignedIn": "2026-04-04T05:06:58.000Z"
+    }
+  ],
+  "indexes": [
+    {
+      "Table": "users",
+      "Non_unique": 0,
+      "Key_name": "PRIMARY",
+      "Seq_in_index": 1,
+      "Column_name": "id",
+      "Collation": "A",
+      "Cardinality": 5012,
+      "Sub_part": null,
+      "Packed": null,
+      "Null": "",
+      "Index_type": "BTREE",
+      "Comment": "",
+      "Index_comment": "",
+      "Visible": "YES",
+      "Expression": null,
+      "Clustered": "YES",
+      "Global": "NO"
+    }
+  ]
+}

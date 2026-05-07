@@ -1,0 +1,3776 @@
+import DashboardLayout from "@/components/DashboardLayout";
+import ApprovalHistory from "@/components/ApprovalHistory";
+import { fmtDate, fmtShort } from "@/lib/dateUtils";
+import { trpc } from "@/lib/trpc";
+import { formatMoney } from "@/lib/utils";
+import { usePermissions } from "@/hooks/usePermissions";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Tabs, TabsContent, TabsList, TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  DollarSign, Clock, ArrowRight, CheckCircle2, XCircle,
+  RefreshCw, LayoutDashboard, Truck, Package, UserPlus, Layers, ChevronDown, ChevronUp, ChevronRight, List, Trash2, Undo2, Loader2,
+  Timer, AlertTriangle, Siren, BarChart3, Flame, MoreHorizontal,
+} from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import React, { useState, useMemo, useCallback } from "react";
+import { useLocation } from "wouter";
+import { toast } from "sonner";
+import { useMergedPlanGroups } from "@/hooks/useMergedPlanGroups";
+import { TablePagination } from "@/components/TablePagination";
+import { useTableSort, SortableHeader } from "@/components/SortableTable";
+import { buildOutsourceSuborderPreviewMap } from "@/lib/outsourceSuborderPreview";
+import {
+  getApprovalApplicants,
+  getApprovalTypeLabel,
+  getApprovalTypeSummary,
+  getCommandGroupGuide,
+  getGroupCustomerCargoSummary,
+  getGroupCustomerSummary,
+  getGroupRouteSummary,
+  getGroupWarehouseSummary,
+  getMergedChildDeleteLockReason,
+  getMergedChildRollbackLockReason,
+  isMergedChildOrder,
+} from "@/lib/commandGroupRules";
+import {
+  deriveCommandGroupKey,
+  flattenSingleItemCommandGroups,
+  getGroupSummaryText,
+  normalizeCommandGroupItems,
+  type CommandGroupLookup,
+} from "@/lib/commandGrouping";
+import {
+  getApprovalGroupPriceSnapshot as getSharedApprovalGroupPriceSnapshot,
+  getApprovalOriginalPrice,
+  getApprovalOriginalPriceLabel,
+  getApprovalPriceDelta,
+  getApprovalPriceDeltaRate,
+  getApprovalRequestedPrice,
+} from "@shared/approvalPricing";
+import {
+  getOrderOwnerLabel,
+  getOrderPrimaryStatusLabel,
+  getOrderPublicViewReason,
+  getOrderWorkbenchMeta,
+} from "./entryStationTotalTable.utils";
+
+const BIZ_LABELS: Record<string, string> = {
+  outsource: "外请",
+  self: "自运",
+  ltl: "零担",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  pending_assign: "待指派",
+  pending_price: "待定价",
+  pending_dispatch: "待调度",
+  pending_vehicle: "待找车",
+  pending_approval: "待审批",
+  pending_inquiry: "待询价",
+  inquiry_confirmed: "已询价", shipped: "已发运",
+  dispatched: "已调度",
+  in_transit: "运输中",
+  delivered: "已送达",
+  signed: "已签收",
+  settled: "已结算",
+  on_hold: "等通知",
+  cancelled: "已取消",
+};
+
+function getCountLabel(count: number, label: string) {
+  return `共 ${count} 条${label}`;
+}
+
+function getCountText(count: number) {
+  return `共 ${count} 条`;
+}
+
+type DangerActionMenuProps = {
+  onRollback?: () => void;
+  rollbackDisabled?: boolean;
+  rollbackLabel?: string;
+  onDelete?: () => void;
+  deleteDisabled?: boolean;
+  deleteLabel?: string;
+  triggerLabel?: string;
+  triggerClassName?: string;
+};
+
+function DangerActionMenu({
+  onRollback,
+  rollbackDisabled = false,
+  rollbackLabel = "退回上一步",
+  onDelete,
+  deleteDisabled = false,
+  deleteLabel = "删除订单",
+  triggerLabel,
+  triggerClassName,
+}: DangerActionMenuProps) {
+  if (!onRollback && !onDelete) {
+    return null;
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="ghost"
+          className={triggerClassName || (triggerLabel
+            ? "h-8 border border-orange-300 px-2 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+            : "h-7 w-7 p-0 text-muted-foreground hover:text-foreground")}
+        >
+          <MoreHorizontal className={triggerLabel ? "mr-1 h-4 w-4" : "h-3.5 w-3.5"} />
+          {triggerLabel || null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {onRollback && (
+          <DropdownMenuItem onClick={onRollback} disabled={rollbackDisabled}>
+            <Undo2 className="mr-2 h-3.5 w-3.5 text-orange-600" />
+            {rollbackLabel}
+          </DropdownMenuItem>
+        )}
+        {onDelete && (
+          <DropdownMenuItem onClick={onDelete} disabled={deleteDisabled}>
+            <Trash2 className="mr-2 h-3.5 w-3.5 text-red-600" />
+            {deleteLabel}
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function getGroupingHint(items: Array<{ mergedPlanNumber?: string | null; parentId?: number | null; orderNumber?: string | null }>) {
+  return getGroupSummaryText(items);
+}
+
+type ApprovalRiskBadge = {
+  label: string;
+  className: string;
+};
+
+function parseApprovalReasonText(reasonText?: string | null) {
+  const normalized = reasonText?.trim() ?? "";
+  if (!normalized) {
+    return { mainReason: "", remarkPart: "" };
+  }
+  const hasRemark = normalized.includes("备注：");
+  return {
+    mainReason: hasRemark ? normalized.split("备注：")[0].trim() : normalized,
+    remarkPart: hasRemark ? normalized.split("备注：")[1]?.trim() ?? "" : "",
+  };
+}
+
+function getApprovalDeltaTone(priceDelta: number | null, deltaRate: number | null) {
+  if (priceDelta === null) return "border-slate-200 bg-slate-50 text-slate-600";
+  if (priceDelta > 0 || (deltaRate !== null && deltaRate > 0)) {
+    return deltaRate !== null && deltaRate >= 10
+      ? "border-red-200 bg-red-50 text-red-700"
+      : "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (priceDelta < 0) return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function getApprovalRiskBadges(item: any): ApprovalRiskBadge[] {
+  const combinedText = `${item.reason ?? ""} ${item.remarks ?? ""}`;
+  const badges: ApprovalRiskBadge[] = [];
+
+  if (item.isUrgent) {
+    badges.push({ label: "加急", className: "border-red-200 bg-red-50 text-red-700" });
+  }
+
+  if (/押金|到付|现金|垫付|预付/.test(combinedText)) {
+    badges.push({ label: "特殊费用", className: "border-amber-200 bg-amber-50 text-amber-700" });
+  }
+
+  return badges;
+}
+
+function ApprovalDecisionBadges({ items }: { items: any[] }) {
+  const badges = items.reduce<ApprovalRiskBadge[]>((acc, currentItem) => {
+    getApprovalRiskBadges(currentItem).forEach((badge) => {
+      if (!acc.some((existing) => existing.label === badge.label)) {
+        acc.push(badge);
+      }
+    });
+    return acc;
+  }, []);
+  const receivingSummary = summarizeApprovalTextList(
+    items.map((currentItem) => getApprovalReceivingSummary(currentItem)),
+  );
+
+  if (badges.length === 0 && !receivingSummary) {
+    return <span className="text-xs text-muted-foreground">常规审批</span>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {badges.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {badges.map((badge) => (
+            <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
+              {badge.label}
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <span className="text-xs text-muted-foreground">常规审批</span>
+      )}
+      {receivingSummary ? (
+        <div className="rounded-md border border-orange-200 bg-orange-50 px-2.5 py-2 text-[11px] leading-5 text-orange-900">
+          <div className="text-[10px] font-medium text-orange-700">收货备注</div>
+          <div className="mt-1 break-words text-wrap-safe">{receivingSummary}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function sanitizeApprovalSummaryText(value?: string | null) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value
+    .split(/[；;]+/)
+    .map((part) => part.trim())
+    .filter((part) => part && !/^总吨位[:：]/.test(part) && !/^总重量[:：]/.test(part))
+    .join("；");
+}
+
+function getApprovalSummaryTexts(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => sanitizeApprovalSummaryText(value))
+        .filter(Boolean),
+    ),
+  );
+}
+
+function summarizeApprovalTextList(values: Array<string | null | undefined>) {
+  const texts = getApprovalSummaryTexts(values);
+  if (texts.length === 0) {
+    return "";
+  }
+  if (texts.length === 1) {
+    return texts[0];
+  }
+  if (texts.length === 2) {
+    return texts.join("；");
+  }
+  return `${texts.slice(0, 2).join("；")}；另有${texts.length - 2}条补充说明`;
+}
+
+function getApprovalReceivingSummary(item: any) {
+  const directNote = sanitizeApprovalSummaryText(item?.receivingNote);
+  if (directNote) {
+    return directNote;
+  }
+
+  const expectedReceiveText = item?.expectedReceiveAt
+    ? `预计收货 ${fmtDate(item.expectedReceiveAt)}`
+    : "";
+  const nextFollowUpText = item?.nextFollowUpAt
+    ? `下次跟进 ${fmtDate(item.nextFollowUpAt)}`
+    : "";
+  const reasonText = sanitizeApprovalSummaryText(item?.receivingReason);
+
+  if (item?.receivingStatus === "wait_notice") {
+    return ["等通知", expectedReceiveText, nextFollowUpText, reasonText].filter(Boolean).join("；");
+  }
+  if (item?.receivingStatus === "not_receivable") {
+    return ["暂不收货", reasonText, nextFollowUpText, expectedReceiveText].filter(Boolean).join("；");
+  }
+  if (item?.receivingStatus === "receivable") {
+    return ["可收货", expectedReceiveText, reasonText].filter(Boolean).join("；");
+  }
+
+  return [reasonText, expectedReceiveText, nextFollowUpText].filter(Boolean).join("；");
+}
+
+function getApprovalGroupReasonSummary(items: any[]) {
+  return summarizeApprovalTextList(
+    items.map((currentItem) => parseApprovalReasonText(currentItem.reason).mainReason),
+  );
+}
+
+function getApprovalGroupRemarkSummary(items: any[]) {
+  return summarizeApprovalTextList(
+    items.flatMap((currentItem) => {
+      const parsed = parseApprovalReasonText(currentItem.reason);
+      return [parsed.remarkPart, currentItem.remarks];
+    }),
+  );
+}
+
+function getApprovalGroupSpecialFlagSummary(items: any[]) {
+  const flags: string[] = [];
+  if (items.some((currentItem) => currentItem.isUrgent)) {
+    flags.push("含加急单");
+  }
+  if (items.some((currentItem) => /押金|到付|现金|垫付|预付/.test(`${currentItem.reason ?? ""} ${currentItem.remarks ?? ""}`))) {
+    flags.push("含特殊费用说明");
+  }
+  return flags.join("；");
+}
+
+function getApprovalGroupPreviousStatusSummary(items: any[]) {
+  return getApprovalSummaryTexts(
+    items.map((currentItem) =>
+      currentItem.previousStatus ? STATUS_LABELS[currentItem.previousStatus] || currentItem.previousStatus : "",
+    ),
+  ).join(" / ");
+}
+
+function getApprovalGroupDecisionSummary(items: any[]) {
+  const groupPriceSnapshot = getApprovalGroupPriceSnapshot(items);
+  const requestedText = groupPriceSnapshot.requestedPrice !== null
+    ? `整组申请总额 ${formatMoney(String(groupPriceSnapshot.requestedPrice))}`
+    : "整组申请总额待确认";
+
+  if (
+    groupPriceSnapshot.originalPrice === null
+    || groupPriceSnapshot.requestedPrice === null
+    || groupPriceSnapshot.priceDelta === null
+  ) {
+    return `按组合订单整组价格决策；${requestedText}`;
+  }
+
+  const baselineText = `整组基准 ${formatMoney(String(groupPriceSnapshot.originalPrice))}`;
+  if (groupPriceSnapshot.priceDelta === 0) {
+    return `按组合订单整组价格决策；${requestedText}；${baselineText}；与整组基准持平`;
+  }
+
+  const deltaDirection = groupPriceSnapshot.priceDelta > 0 ? "上浮" : "回落";
+  const deltaAmount = formatMoney(String(Math.abs(groupPriceSnapshot.priceDelta)));
+  const deltaRate = groupPriceSnapshot.deltaRate !== null
+    ? `（${groupPriceSnapshot.priceDelta > 0 ? "+" : "-"}${Math.abs(groupPriceSnapshot.deltaRate)}%）`
+    : "";
+
+  return `按组合订单整组价格决策；${requestedText}；${baselineText}；较整组基准${deltaDirection} ${deltaAmount}${deltaRate}`;
+}
+
+function getApprovalGroupPriceSnapshot(items: any[]) {
+  return getSharedApprovalGroupPriceSnapshot(items);
+}
+
+function getApprovalIncomeFreightValue(items: any[]) {
+  return Number(
+    items.reduce((sum, currentItem) => {
+      const customerPrice = parseFloat(String(currentItem.customerPrice ?? ""));
+      if (Number.isFinite(customerPrice) && customerPrice > 0) {
+        return sum + customerPrice;
+      }
+      const quotedPrice = parseFloat(String(currentItem.quotedPrice ?? ""));
+      return sum + (Number.isFinite(quotedPrice) && quotedPrice > 0 ? quotedPrice : 0);
+    }, 0).toFixed(2),
+  );
+}
+
+function ApprovalSummaryContent({
+  item,
+  itemOrderId,
+  items,
+}: {
+  item: any;
+  itemOrderId: number;
+  items?: any[];
+}) {
+  const summarySourceItems = items?.length ? items : [item].filter(Boolean);
+  const referenceItem = summarySourceItems[0] ?? item ?? {};
+  const isGroupSummary = summarySourceItems.length > 1;
+  const approvalTypeLabel = isGroupSummary ? getApprovalTypeSummary(summarySourceItems) : getApprovalTypeLabel(referenceItem?.approvalType);
+  const totalWeightValue = Number(
+    summarySourceItems.reduce((sum, currentItem) => sum + (parseFloat(String(currentItem.weight ?? currentItem.loadingWeight ?? 0)) || 0), 0).toFixed(3),
+  );
+  const deliveryAddress = [referenceItem.deliveryAddress, referenceItem.receivingAddress, referenceItem.destinationAddress, referenceItem.unloadingAddress]
+    .find((value) => typeof value === "string" && value.trim()) as string | undefined;
+  const customerName = isGroupSummary
+    ? getGroupCustomerSummary(summarySourceItems)
+    : referenceItem.customerName || "-";
+  const cargoName = isGroupSummary
+    ? summarizeApprovalTextList(summarySourceItems.map((currentItem) => currentItem.cargoName || currentItem.productName)) || "-"
+    : referenceItem.cargoName || referenceItem.productName || "-";
+  const warehouseName = isGroupSummary
+    ? getGroupWarehouseSummary(summarySourceItems)
+    : referenceItem.warehouseName || referenceItem.originCity || "-";
+  const receivingNote = summarizeApprovalTextList(
+    summarySourceItems.map((currentItem) => getApprovalReceivingSummary(currentItem)),
+  );
+  const totalIncomeFreightValue = getApprovalIncomeFreightValue(summarySourceItems);
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <Badge variant="outline" className="text-[11px]">
+          {approvalTypeLabel || "待审批"}
+        </Badge>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-50/80 p-4 shadow-sm">
+        <div className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
+          {isGroupSummary ? "第一层 · 组合主单摘要" : "第一层 · 当前订单摘要"}
+        </div>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          <div className="rounded-lg border border-slate-200 bg-white/90 p-3.5">
+            <div className="text-[11px] font-medium text-slate-500">客户</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 break-words text-wrap-safe">{customerName}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white/90 p-3.5">
+            <div className="text-[11px] font-medium text-slate-500">货物简称</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900 break-words text-wrap-safe">{cargoName}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white/90 p-3.5">
+            <div className="text-[11px] font-medium text-slate-500">发货仓库</div>
+            <div className="mt-1 text-sm text-slate-800 break-words text-wrap-safe">{warehouseName}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white/90 p-3.5 lg:col-span-2 xl:col-span-2">
+            <div className="text-[11px] font-medium text-slate-500">收货地址</div>
+            <div className="mt-1 text-sm leading-6 text-slate-800 break-words text-wrap-safe">
+              {isGroupSummary ? getGroupRouteSummary(summarySourceItems) : ([referenceItem.destinationCity, deliveryAddress].filter(Boolean).join(" · ") || referenceItem.destinationCity || "待补收货地址")}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white/90 p-3.5">
+            <div className="text-[11px] font-medium text-slate-500">重量</div>
+            <div className="mt-1 text-sm font-semibold text-slate-900">{totalWeightValue > 0 ? `${totalWeightValue.toFixed(3)}t` : "-"}</div>
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3.5">
+            <div className="text-[11px] font-medium text-emerald-700">收入运费</div>
+            <div className="mt-1 text-sm font-semibold text-emerald-900">{totalIncomeFreightValue > 0 ? formatMoney(String(totalIncomeFreightValue)) : "-"}</div>
+          </div>
+          <div className="rounded-lg border border-orange-200 bg-orange-50/70 p-3.5 lg:col-span-2 xl:col-span-3">
+            <div className="text-[11px] font-medium text-orange-700">收货备注</div>
+            <div className="mt-1 text-sm leading-6 text-orange-900 break-words text-wrap-safe">{receivingNote || "-"}</div>
+          </div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-3.5 lg:col-span-2 xl:col-span-3">
+            <div className="text-[11px] font-medium text-blue-700">发货备注</div>
+            <div className="mt-1 text-sm leading-6 text-blue-900 break-words text-wrap-safe">{referenceItem.shippingNote || referenceItem.remarks || "-"}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-1 shadow-sm">
+        <ApprovalHistory
+          orderId={itemOrderId}
+          childOrderRefs={isGroupSummary ? summarySourceItems.map((currentItem) => ({
+            orderId: currentItem.orderId ?? currentItem.id,
+            orderNumber: currentItem.orderNumber ?? null,
+            systemCode: currentItem.systemCode ?? null,
+            customerName: currentItem.customerName ?? null,
+            cargoName: currentItem.cargoName ?? currentItem.productName ?? null,
+            originCity: currentItem.originCity ?? null,
+            warehouseName: currentItem.warehouseName ?? null,
+            destinationCity: currentItem.destinationCity ?? null,
+            deliveryAddress: currentItem.deliveryAddress ?? currentItem.destinationAddress ?? null,
+            receivingAddress: currentItem.receivingAddress ?? null,
+            unloadingAddress: currentItem.unloadingAddress ?? null,
+            weight: currentItem.weight ?? currentItem.loadingWeight ?? null,
+            referencePrice: currentItem.dispatchPrice ?? currentItem.quotedPrice ?? currentItem.actualFreight ?? null,
+          })) : []}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ApprovalPriceComparison({ item, items }: { item: any; items?: any[] }) {
+  const priceSourceItems = items?.length ? items : [item].filter(Boolean);
+  const referenceItem = priceSourceItems[0] ?? item ?? {};
+  const isGroupPrice = priceSourceItems.length > 1;
+  const groupPriceSnapshot = isGroupPrice ? getApprovalGroupPriceSnapshot(priceSourceItems) : null;
+  const originalPrice = isGroupPrice ? groupPriceSnapshot?.originalPrice ?? null : getApprovalOriginalPrice(referenceItem);
+  const originalPriceLabel = isGroupPrice ? "整组基准价" : getApprovalOriginalPriceLabel(referenceItem);
+  const requestedPrice = isGroupPrice ? groupPriceSnapshot?.requestedPrice ?? null : getApprovalRequestedPrice(referenceItem);
+  const priceDelta = isGroupPrice ? groupPriceSnapshot?.priceDelta ?? null : getApprovalPriceDelta(referenceItem);
+  const deltaRate = isGroupPrice ? groupPriceSnapshot?.deltaRate ?? null : getApprovalPriceDeltaRate(referenceItem);
+  const missingOriginalCount = isGroupPrice ? groupPriceSnapshot?.missingOriginalCount ?? 0 : 0;
+  const missingRequestedCount = isGroupPrice ? groupPriceSnapshot?.missingRequestedCount ?? 0 : 0;
+  const totalIncomeFreightValue = getApprovalIncomeFreightValue(priceSourceItems);
+  const deltaTone = getApprovalDeltaTone(priceDelta, deltaRate);
+  const riskHint =
+    priceDelta === null
+      ? ""
+      : priceDelta > 0
+        ? deltaRate !== null && deltaRate >= 10
+          ? "涨幅偏高"
+          : "建议复核"
+        : priceDelta < 0
+          ? "价格回落"
+          : "与原价持平";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 text-[12px] leading-5">
+        <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-500">{originalPriceLabel}</span>
+        <span className="font-semibold text-slate-700">{originalPrice !== null ? formatMoney(String(originalPrice)) : "-"}</span>
+        <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
+        <span className="rounded-md bg-orange-50 px-2 py-1 text-[10px] text-orange-700">{isGroupPrice ? "整组申请价" : "申请价"}</span>
+        <span className="font-semibold text-orange-600">{requestedPrice !== null ? formatMoney(String(requestedPrice)) : "-"}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 text-[12px] leading-5">
+        <span className="rounded-md bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">
+          {isGroupPrice ? "整组收入运费" : "收入运费"}
+        </span>
+        <span className="font-semibold text-emerald-700">{totalIncomeFreightValue > 0 ? formatMoney(String(totalIncomeFreightValue)) : "-"}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {priceDelta !== null ? (
+          <>
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${deltaTone}`}>
+              差额 {priceDelta > 0 ? "+" : ""}{formatMoney(String(priceDelta))}
+            </span>
+            {deltaRate !== null && (
+              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${deltaTone}`}>
+                涨幅 {deltaRate > 0 ? "+" : ""}{deltaRate}%
+              </span>
+            )}
+            {riskHint && (
+              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${deltaTone}`}>
+                {riskHint}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">暂无可对比基准价</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 客服经理指挥台
+ * 四个核心队列：待定价 | 待手动分配 | 待审批 | 全局概览
+ */
+export default function CommandCenter() {
+  const { hasPermission } = usePermissions();
+  const [, setLocation] = useLocation();
+  const [activeTab, setActiveTab] = useState("timeliness");
+  const [pricingDialog, setPricingDialog] = useState<any>(null);
+  const [priceValue, setPriceValue] = useState("");
+  const [pricingRemark, setPricingRemark] = useState("");
+  const [assignDialog, setAssignDialog] = useState<any>(null);
+  const [selectedDispatcherId, setSelectedDispatcherId] = useState<string>("");
+  const [groupPricingMode, setGroupPricingMode] = useState(false);
+  const [groupPricingOrders, setGroupPricingOrders] = useState<any[]>([]);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+  const [rollbackTargetId, setRollbackTargetId] = useState<number | null>(null);
+  const [rollbackReason, setRollbackReason] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchRollbackOpen, setBatchRollbackOpen] = useState(false);
+  const [batchRollbackReason, setBatchRollbackReason] = useState("");
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [urgentDialogInfo, setUrgentDialogInfo] = useState<{
+    orderIds: number[];
+    orders: any[];
+    action: "mark" | "clear";
+    scopeLabel: string;
+  } | null>(null);
+  const [urgentReason, setUrgentReason] = useState("");
+  // 批量分配调度员状态
+  const [batchAssignOpen, setBatchAssignOpen] = useState(false);
+  const [batchAssignDispatcherId, setBatchAssignDispatcherId] = useState<string>("");
+  // 批量审批状态
+  const [batchApproveOpen, setBatchApproveOpen] = useState(false);
+  const [batchApproveAction, setBatchApproveAction] = useState<"approve" | "reject">("approve");
+  const [batchApproveComment, setBatchApproveComment] = useState("");
+  const [expandedOutsourceSuborders, setExpandedOutsourceSuborders] = useState<Set<number>>(new Set());
+  const [expandedApprovalHistoryOrderIds, setExpandedApprovalHistoryOrderIds] = useState<Set<number>>(new Set());
+
+  // 发货时效监控筛选
+  const [timelinessFilter, setTimelinessFilter] = useState<"all" | "normal" | "warning" | "overdue">("all");
+
+  // 各页签分组开关
+  const [pricingGroupByPlan, setPricingGroupByPlan] = useState(true);
+  const [manualGroupByPlan, setManualGroupByPlan] = useState(true);
+  const [approvalGroupByPlan, setApprovalGroupByPlan] = useState(true);
+  const [timelinessGroupByPlan, setTimelinessGroupByPlan] = useState(true);
+
+  // 分页状态
+  const [pricingPage, setPricingPage] = useState(1);
+  const [pricingPageSize, setPricingPageSize] = useState(100);
+  const [manualPage, setManualPage] = useState(1);
+  const [manualPageSize, setManualPageSize] = useState(100);
+  const [overviewPage, setOverviewPage] = useState(1);
+  const [overviewPageSize, setOverviewPageSize] = useState(100);
+  const [timelinessPage, setTimelinessPage] = useState(1);
+  const [timelinessPageSize, setTimelinessPageSize] = useState(100);
+
+  // 全局搜索和筛选
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [globalFilterType, setGlobalFilterType] = useState<string>("all");
+  const [globalFilterStatus, setGlobalFilterStatus] = useState<string>("all");
+
+  // 发货时效监控数据
+  const { data: timelinessData, refetch: refetchTimeliness } = trpc.stats.shippingTimeliness.useQuery(
+    undefined,
+    { refetchInterval: 30000 }
+  );
+
+  // 待定价队列：外请订单 pending_price 状态且未分配调度员
+  const { data: pricingData, refetch: refetchPricing } = trpc.order.list.useQuery(
+    { status: "pending_price", businessType: "outsource", pageSize: 100 },
+    { refetchInterval: 10000 }
+  );
+
+  // 待审批队列
+  const { data: approvalData, refetch: refetchApproval } = trpc.approval.list.useQuery(
+    { status: "pending" },
+    { refetchInterval: 10000 }
+  );
+
+  // 全局概览：所有活跃订单
+  const { data: allData, refetch: refetchAll } = trpc.order.list.useQuery(
+    { pageSize: 200 },
+    { refetchInterval: 15000 }
+  );
+
+  // 获取外请调度员列表（用于手动分配）
+  const { data: dispatcherList } = trpc.order.getDispatchers.useQuery();
+
+  const outsourceDispatchers = useMemo(() => {
+    return (dispatcherList ?? []).filter((u: any) => u.role === "outsource_dispatcher");
+  }, [dispatcherList]);
+
+  const rollbackMutation = trpc.order.rollbackStatus.useMutation({
+    onSuccess: (res) => {
+      refetchPricing(); refetchAll();
+      toast.success(`订单已退回：${res.fromLabel} → ${res.toLabel}`);
+      setRollbackTargetId(null);
+      setRollbackReason("");
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
+  const batchRollbackMutation = trpc.order.batchRollback.useMutation({
+    onSuccess: (res) => {
+      refetchPricing(); refetchApproval(); refetchAll();
+      const msg = res.skipCount > 0
+        ? `成功退回 ${res.successCount} 个订单，${res.skipCount} 个不支持退回已跳过`
+        : `成功退回 ${res.successCount} 个订单`;
+      toast.success(msg);
+      setSelectedIds(new Set());
+      setBatchRollbackOpen(false);
+      setBatchRollbackReason("");
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  };
+  const toggleApprovalHistory = useCallback((orderId: number) => {
+    setExpandedApprovalHistoryOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }, []);
+  const getDeleteLockReason = useCallback((order: any) => getMergedChildDeleteLockReason(order), []);
+  const getRollbackLockReason = useCallback((order: any) => getMergedChildRollbackLockReason(order), []);
+  const openDeleteDialog = useCallback((order: any, orderId?: number | null) => {
+    const lockReason = getDeleteLockReason(order);
+    if (lockReason) {
+      toast.error(lockReason);
+      return;
+    }
+    const resolvedId = orderId ?? order?.orderId ?? order?.id;
+    if (!resolvedId) return;
+    setDeleteTargetId(resolvedId);
+  }, [getDeleteLockReason]);
+  const openRollbackDialog = useCallback((order: any, orderId?: number | null) => {
+    const lockReason = getRollbackLockReason(order);
+    if (lockReason) {
+      toast.error(lockReason);
+      return;
+    }
+    const resolvedId = orderId ?? order?.orderId ?? order?.id;
+    if (!resolvedId) return;
+    setRollbackTargetId(resolvedId);
+    setRollbackReason("");
+  }, [getRollbackLockReason]);
+  const deleteMutation = trpc.order.delete.useMutation({
+    onSuccess: () => {
+      refetchPricing(); refetchApproval(); refetchAll();
+      toast.success("订单已删除");
+      setDeleteTargetId(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const batchDeleteMutation = trpc.order.batchDelete.useMutation({
+    onSuccess: (res) => {
+      refetchPricing(); refetchApproval(); refetchAll();
+      toast.success(`已批量删除 ${res.count} 个订单`);
+      setBatchDeleteOpen(false);
+      setSelectedIds(new Set());
+    },
+    onError: (err: any) => toast.error(err.message || "批量删除失败"),
+  });
+  const updateOrderFields = trpc.order.updateOrderFields.useMutation();
+
+  const priceAndAssign = trpc.order.priceAndAssign.useMutation({
+    onSuccess: (result) => {
+      if (result.autoAssigned) {
+        toast.success(`定价成功，已自动分配到区域: ${result.assignedRegion}`);
+      } else {
+        toast.warning("定价成功，但未匹配到区域调度员，请在'待手动分配'中手动指派");
+      }
+      setPricingDialog(null);
+      setPriceValue("");
+      refetchPricing();
+      refetchAll();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const manualAssign = trpc.order.manualAssign.useMutation({
+    onSuccess: () => {
+      toast.success("手动分配成功，订单已进入待找车队列");
+      setAssignDialog(null);
+      setSelectedDispatcherId("");
+      refetchPricing();
+      refetchAll();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const batchManualAssign = trpc.order.batchManualAssign.useMutation({
+    onSuccess: (data) => {
+      toast.success(`批量分配成功，共 ${data.count} 个订单已进入待找车队列`);
+      setBatchAssignOpen(false);
+      setBatchAssignDispatcherId("");
+      setSelectedIds(new Set());
+      refetchPricing();
+      refetchAll();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // 重新分配调度员
+  const [reassignDialog, setReassignDialog] = useState<any>(null);
+  const [reassignDispatcherId, setReassignDispatcherId] = useState("");
+  const reassignMutation = trpc.order.reassignDispatcher.useMutation({
+    onSuccess: () => {
+      toast.success("调度员重新分配成功");
+      setReassignDialog(null);
+      setReassignDispatcherId("");
+      refetchPricing();
+      refetchAll();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // 整组重新分配调度员（合并计划号专用，不改变状态）
+  const [groupReassignOpen, setGroupReassignOpen] = useState(false);
+  const [groupReassignInfo, setGroupReassignInfo] = useState<{ planNumber: string; orderIds: number[]; currentDispatcher?: string } | null>(null);
+  const [groupReassignDispatcherId, setGroupReassignDispatcherId] = useState("");
+  const batchAssignMutation = trpc.order.batchAssign.useMutation({
+    onSuccess: (res) => {
+      toast.success(`整组重新分配成功，共 ${res.count} 个订单`);
+      setGroupReassignOpen(false);
+      setGroupReassignInfo(null);
+      setGroupReassignDispatcherId("");
+      setSelectedIds(new Set());
+      refetchAll();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  // 所有调度员列表（包含外请+车队）
+  const allDispatchers = useMemo(() => {
+    return (dispatcherList ?? []).filter((u: any) => ["outsource_dispatcher", "fleet_dispatcher"].includes(u.role));
+  }, [dispatcherList]);
+
+  const batchApprove = trpc.approval.batchExecute.useMutation({
+    onSuccess: (data) => {
+      toast.success(`批量${batchApproveAction === "approve" ? "通过" : "驳回"}成功，处理 ${data.count}/${data.total} 个`);
+      setBatchApproveOpen(false);
+      setBatchApproveComment("");
+      setSelectedIds(new Set());
+      refetchApproval();
+      refetchAll();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const executeApproval = trpc.approval.execute.useMutation({
+    onSuccess: (_, vars) => {
+      toast.success(vars.action === "approve" ? "审批通过，订单已进入已调度状态" : "已驳回，订单退回待找车");
+      refetchApproval();
+      refetchAll();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const allOrdersRaw = allData?.items ?? [];
+  const allPreviewOrderIds = useMemo(() => allOrdersRaw.map((order: any) => order.id), [allOrdersRaw]);
+  const { data: overviewOutsourceSuborderPreviewData } = trpc.order.getOutsourceSuborderPreviews.useQuery(
+    { orderIds: allPreviewOrderIds.length > 0 ? allPreviewOrderIds : [0] },
+    { enabled: allPreviewOrderIds.length > 0, staleTime: 30_000 }
+  );
+  const overviewOutsourceSuborderPreviewMap = useMemo(
+    () => buildOutsourceSuborderPreviewMap(overviewOutsourceSuborderPreviewData?.items),
+    [overviewOutsourceSuborderPreviewData],
+  );
+  const toggleOutsourceSuborderPreview = useCallback((orderId: number) => {
+    setExpandedOutsourceSuborders((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }, []);
+
+  // 全局搜索和筛选
+  const allOrders = useMemo(() => {
+    let list = allOrdersRaw;
+    if (globalSearch.trim()) {
+      const q = globalSearch.trim().toLowerCase();
+      list = list.filter((o: any) =>
+        (o.orderNumber || "").toLowerCase().includes(q) ||
+        (o.systemCode || "").toLowerCase().includes(q) ||
+        (o.customerName || "").toLowerCase().includes(q) ||
+        (o.cargoName || "").toLowerCase().includes(q) ||
+        (o.mergedPlanNumber || "").toLowerCase().includes(q) ||
+        (o.originCity || "").toLowerCase().includes(q) ||
+        (o.destinationCity || "").toLowerCase().includes(q) ||
+        (o.plateNumber || "").toLowerCase().includes(q) ||
+        (o.driverName || "").toLowerCase().includes(q)
+      );
+    }
+    if (globalFilterType !== "all") {
+      list = list.filter((o: any) => o.businessType === globalFilterType);
+    }
+    if (globalFilterStatus !== "all") {
+      list = list.filter((o: any) => o.status === globalFilterStatus);
+    }
+    return list;
+  }, [allOrdersRaw, globalSearch, globalFilterType, globalFilterStatus]);
+
+  // 全局概览排序
+  const overviewSortGetters = useMemo(() => ({
+    createdAt: (o: any) => o.createdAt ? new Date(o.createdAt).getTime() : 0,
+    weight: (o: any) => parseFloat(o.weight) || 0,
+    dispatchPrice: (o: any) => parseFloat(o.dispatchPrice) || 0,
+    actualFreight: (o: any) => parseFloat(o.actualFreight) || 0,
+    status: (o: any) => o.status || "",
+    businessType: (o: any) => o.businessType || "",
+    customerName: (o: any) => o.customerName || "",
+    originCity: (o: any) => o.originCity || "",
+    destinationCity: (o: any) => o.destinationCity || "",
+  }), []);
+  const { sorted: sortedAllOrders, sort: overviewSort, toggleSort: toggleOverviewSort } = useTableSort(allOrders, overviewSortGetters);
+
+  // 全局概览合并计划号分组
+  const [overviewGroupByPlan, setOverviewGroupByPlan] = useState(true);
+  const { groupedData: overviewGrouped, expandedGroups: overviewExpanded, toggleGroup: toggleOverviewGroup } = useMergedPlanGroups(sortedAllOrders, overviewGroupByPlan);
+  const renderOutsourceSuborderPreview = useCallback((order: any) => {
+    const sourceOrderId = order?.orderId ?? order?.id;
+    if (typeof sourceOrderId !== "number") return null;
+    const preview = overviewOutsourceSuborderPreviewMap.get(sourceOrderId);
+    if (!preview || preview.parentOrders.length === 0) return null;
+    const isExpanded = expandedOutsourceSuborders.has(sourceOrderId);
+    return (
+      <>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-fit px-2 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleOutsourceSuborderPreview(sourceOrderId);
+          }}
+        >
+          {isExpanded ? <ChevronDown className="h-3.5 w-3.5 mr-1" /> : <ChevronRight className="h-3.5 w-3.5 mr-1" />}
+          关联主单{preview.parentOrders.length}单
+        </Button>
+        {isExpanded && (
+          <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 p-2 text-xs text-slate-700">
+            <div className="mb-2 font-medium text-blue-700">零担外请关联主单</div>
+            <div className="space-y-2">
+              {preview.parentOrders.map((parent: any) => (
+                <div key={parent.id} className="rounded-md border border-blue-100 bg-white/90 px-2 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[11px] text-slate-700">{parent.orderNumber || parent.systemCode || `#${parent.id}`}</span>
+                    <Badge variant="outline" className="text-[10px]">{STATUS_LABELS[parent.status] || parent.status || "-"}</Badge>
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-600">{parent.customerName || "-"} · {parent.cargoName || "-"}</div>
+                  <div className="mt-1 text-[11px] text-slate-500">{parent.originCity || "-"} → {parent.destinationCity || "-"} · {parent.weight ? `${parent.weight}t` : "-"}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+                    <span>调度价 {parent.dispatchPrice ? formatMoney(parent.dispatchPrice) : "-"}</span>
+                    <span>收货备注 {getApprovalReceivingSummary(parent) || "-"}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }, [expandedOutsourceSuborders, overviewOutsourceSuborderPreviewMap, toggleOutsourceSuborderPreview]);
+
+  const previewOrderIds = useMemo(() => {
+    const ids = new Set<number>();
+    overviewOutsourceSuborderPreviewMap.forEach((preview, orderId) => {
+      if (preview?.parentOrders?.length > 0) ids.add(orderId);
+    });
+    return ids;
+  }, [overviewOutsourceSuborderPreviewMap]);
+
+  const commandGroupLookup = useMemo<CommandGroupLookup>(() => {
+    const byId = new Map<number, string>();
+    const byOrderNumber = new Map<string, string>();
+
+    for (const order of allOrdersRaw) {
+      const groupKey = deriveCommandGroupKey(order);
+      if (!groupKey) continue;
+
+      const preview = overviewOutsourceSuborderPreviewMap.get(order.id);
+      if (!preview || preview.parentOrders.length === 0) continue;
+
+      for (const parentOrder of preview.parentOrders) {
+        if (typeof parentOrder?.id === "number") {
+          byId.set(parentOrder.id, groupKey);
+        }
+
+        const parentOrderNumber = typeof parentOrder?.orderNumber === "string"
+          ? parentOrder.orderNumber.trim()
+          : "";
+        if (parentOrderNumber) {
+          byOrderNumber.set(parentOrderNumber, groupKey);
+        }
+
+        const parentSystemCode = typeof parentOrder?.systemCode === "string"
+          ? parentOrder.systemCode.trim()
+          : "";
+        if (parentSystemCode && !byOrderNumber.has(parentSystemCode)) {
+          byOrderNumber.set(parentSystemCode, groupKey);
+        }
+      }
+    }
+
+    return { byId, byOrderNumber };
+  }, [allOrdersRaw, overviewOutsourceSuborderPreviewMap]);
+  const approvalGroupCarrierMap = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const order of allOrdersRaw) {
+      const groupKey = deriveCommandGroupKey(order);
+      if (!groupKey) continue;
+
+      const preview = overviewOutsourceSuborderPreviewMap.get(order.id);
+      if (!preview || preview.parentOrders.length === 0) continue;
+
+      const matchedParentOrder = preview.parentOrders.find((parentOrder: any) => {
+        if (!parentOrder) return false;
+        if (groupKey === `前段外请主单#${parentOrder.id}`) return true;
+        const parentMergedPlanNumber = typeof parentOrder.mergedPlanNumber === "string"
+          ? parentOrder.mergedPlanNumber.trim()
+          : "";
+        return parentMergedPlanNumber ? parentMergedPlanNumber === groupKey : false;
+      }) ?? preview.parentOrders[0];
+
+      if (!matchedParentOrder) continue;
+      if (!map.has(groupKey)) map.set(groupKey, matchedParentOrder);
+    }
+    return map;
+  }, [allOrdersRaw, overviewOutsourceSuborderPreviewMap]);
+
+  // 分离待定价队列：已定价但未分配调度员的（需手动分配）vs 未定价的
+  const pricingQueueItems = useMemo(
+    () => normalizeCommandGroupItems(pricingData?.items, commandGroupLookup),
+    [pricingData, commandGroupLookup],
+  );
+
+  const pricingOrders = useMemo(() => {
+    return pricingQueueItems.filter(o => !o.dispatchPrice || !o.assignedDispatcherId);
+  }, [pricingQueueItems]);
+
+  // 待手动分配：已定价但区域匹配失败的（有dispatchPrice但没有assignedDispatcherId）
+  const pendingManualAssign = useMemo(() => {
+    return pricingQueueItems.filter(o => o.dispatchPrice && !o.assignedDispatcherId);
+  }, [pricingQueueItems]);
+
+  // 纯待定价（没有dispatchPrice的）
+  const pureUnpriced = useMemo(() => {
+    return pricingQueueItems.filter(o => !o.dispatchPrice);
+  }, [pricingQueueItems]);
+
+  const pricingVisibleOrders = useMemo(
+    () => pricingGroupByPlan
+      ? pureUnpriced
+      : pureUnpriced.slice((pricingPage - 1) * pricingPageSize, pricingPage * pricingPageSize),
+    [pureUnpriced, pricingGroupByPlan, pricingPage, pricingPageSize],
+  );
+  const {
+    groupedData: pricingGrouped,
+    expandedGroups: pricingExpanded,
+    toggleGroup: togglePricingGroup,
+  } = useMergedPlanGroups(pricingVisibleOrders, pricingGroupByPlan);
+  const pricingDisplayGrouped = useMemo(
+    () => flattenSingleItemCommandGroups(pricingGrouped, previewOrderIds),
+    [previewOrderIds, pricingGrouped],
+  );
+
+  const manualVisibleOrders = useMemo(
+    () => manualGroupByPlan
+      ? pendingManualAssign
+      : pendingManualAssign.slice((manualPage - 1) * manualPageSize, manualPage * manualPageSize),
+    [pendingManualAssign, manualGroupByPlan, manualPage, manualPageSize],
+  );
+  const {
+    groupedData: manualGrouped,
+    expandedGroups: manualExpanded,
+    toggleGroup: toggleManualGroup,
+  } = useMergedPlanGroups(manualVisibleOrders, manualGroupByPlan);
+  const manualDisplayGrouped = useMemo(
+    () => flattenSingleItemCommandGroups(manualGrouped, previewOrderIds),
+    [manualGrouped, previewOrderIds],
+  );
+
+  const approvalItems = useMemo(
+    () => normalizeCommandGroupItems(approvalData?.items, commandGroupLookup),
+    [approvalData, commandGroupLookup],
+  );
+  const {
+    groupedData: approvalGrouped,
+    expandedGroups: approvalExpanded,
+    toggleGroup: toggleApprovalGroup,
+  } = useMergedPlanGroups(approvalItems, approvalGroupByPlan);
+  const approvalDisplayGrouped = useMemo(
+    () => flattenSingleItemCommandGroups(approvalGrouped, previewOrderIds),
+    [approvalGrouped, previewOrderIds],
+  );
+
+  const pricingGroupGuide = useMemo(() => getCommandGroupGuide("pricing"), []);
+  const manualGroupGuide = useMemo(() => getCommandGroupGuide("manual"), []);
+  const approvalGroupGuide = useMemo(() => getCommandGroupGuide("approval"), []);
+
+  const timelinessOrders = useMemo(
+    () => normalizeCommandGroupItems(timelinessData?.urgentOrders, commandGroupLookup),
+    [timelinessData, commandGroupLookup],
+  );
+  const filteredTimelinessOrders = useMemo(() => {
+    return timelinessOrders.filter((order: any) => {
+      if (timelinessFilter === "all") return true;
+      if (timelinessFilter === "normal") return order.waitHours <= 24;
+      if (timelinessFilter === "warning") return order.waitHours > 24 && order.waitHours <= 48;
+      return order.waitHours > 48;
+    });
+  }, [timelinessOrders, timelinessFilter]);
+  const timelinessVisibleOrders = useMemo(
+    () => timelinessGroupByPlan
+      ? filteredTimelinessOrders
+      : filteredTimelinessOrders.slice((timelinessPage - 1) * timelinessPageSize, timelinessPage * timelinessPageSize),
+    [filteredTimelinessOrders, timelinessGroupByPlan, timelinessPage, timelinessPageSize],
+  );
+  const {
+    groupedData: timelinessGrouped,
+    expandedGroups: timelinessExpanded,
+    toggleGroup: toggleTimelinessGroup,
+  } = useMergedPlanGroups(timelinessVisibleOrders, timelinessGroupByPlan);
+
+  // 全局统计
+  const stats = useMemo(() => {
+    const s = { total: allOrders.length, pending: 0, inTransit: 0, delivered: 0 };
+    allOrders.forEach((o) => {
+      if (["pending_assign", "pending_price", "pending_dispatch", "pending_vehicle", "pending_inquiry", "pending_approval"].includes(o.status)) s.pending++;
+      if (["dispatched", "in_transit"].includes(o.status)) s.inTransit++; // in_transit兼容旧数据
+      if (["delivered", "signed"].includes(o.status)) s.delivered++;
+    });
+    return s;
+  }, [allOrders]);
+
+  const currentSelectableOrders = useMemo(() => {
+    if (activeTab === "pricing") return pricingVisibleOrders;
+    if (activeTab === "manual-assign") return manualVisibleOrders;
+    if (activeTab === "approval") {
+      return approvalItems.map((item: any) => ({
+        ...item,
+        id: item.orderId ?? item.id,
+      }));
+    }
+    if (activeTab === "overview") return sortedAllOrders;
+    return [];
+  }, [activeTab, approvalItems, manualVisibleOrders, pricingVisibleOrders, sortedAllOrders]);
+
+  const currentSelectableOrderIds = useMemo(
+    () => Array.from(new Set(
+      currentSelectableOrders
+        .map((order: any) => order.id)
+        .filter((id: unknown): id is number => typeof id === "number")
+    )),
+    [currentSelectableOrders],
+  );
+
+  const currentSelectedOrderIds = useMemo(
+    () => currentSelectableOrderIds.filter((id) => selectedIds.has(id)),
+    [currentSelectableOrderIds, selectedIds],
+  );
+
+  const currentSelectedOrders = useMemo(
+    () => currentSelectableOrders.filter((order: any) => currentSelectedOrderIds.includes(order.id)),
+    [currentSelectableOrders, currentSelectedOrderIds],
+  );
+
+  const toggleSelectMany = useCallback((ids: number[]) => {
+    if (ids.length === 0) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = ids.every((id) => next.has(id));
+      ids.forEach((id) => {
+        if (allSelected) next.delete(id);
+        else next.add(id);
+      });
+      return next;
+    });
+  }, []);
+
+  const replaceSelectedIds = useCallback((ids: number[]) => {
+    setSelectedIds(new Set(ids));
+  }, []);
+
+  const openBatchRollbackDialog = useCallback((ids: number[]) => {
+    if (ids.length === 0) {
+      toast.error("请先选择需要退回的订单");
+      return;
+    }
+    replaceSelectedIds(ids);
+    setBatchRollbackReason("");
+    setBatchRollbackOpen(true);
+  }, [replaceSelectedIds]);
+
+  const openBatchDeleteDialog = useCallback((ids: number[]) => {
+    if (ids.length === 0) {
+      toast.error("请先选择需要删除的订单");
+      return;
+    }
+    replaceSelectedIds(ids);
+    setBatchDeleteOpen(true);
+  }, [replaceSelectedIds]);
+
+  const openUrgentDialog = useCallback((orders: any[], scopeLabel: string) => {
+    const normalizedOrders = orders
+      .map((order: any) => ({
+        ...order,
+        id: order.orderId ?? order.id,
+      }))
+      .filter((order: any) => typeof order.id === "number");
+    if (normalizedOrders.length === 0) {
+      toast.error("未找到可操作的订单");
+      return;
+    }
+    const shouldClear = normalizedOrders.every((order: any) => order.isUrgent);
+    setUrgentDialogInfo({
+      orderIds: normalizedOrders.map((order: any) => order.id),
+      orders: normalizedOrders,
+      action: shouldClear ? "clear" : "mark",
+      scopeLabel,
+    });
+    setUrgentReason(shouldClear ? "" : normalizedOrders.find((order: any) => order.isUrgent)?.urgentReason || "");
+  }, []);
+
+  const confirmUrgentToggle = async () => {
+    if (!urgentDialogInfo) return;
+    if (urgentDialogInfo.action === "mark" && !urgentReason.trim()) {
+      toast.error("请填写加急原因");
+      return;
+    }
+    let successCount = 0;
+    for (const orderId of urgentDialogInfo.orderIds) {
+      try {
+        await updateOrderFields.mutateAsync({
+          id: orderId,
+          isUrgent: urgentDialogInfo.action === "mark",
+          urgentReason: urgentDialogInfo.action === "mark" ? urgentReason.trim() : undefined,
+        });
+        successCount += 1;
+      } catch (error: any) {
+        toast.error(error.message || `订单 #${orderId} 更新失败`);
+      }
+    }
+    if (successCount > 0) {
+      toast.success(
+        urgentDialogInfo.action === "mark"
+          ? `已将 ${successCount} 个订单标记为加急`
+          : `已取消 ${successCount} 个订单的加急标记`,
+      );
+      refetchPricing();
+      refetchApproval();
+      refetchAll();
+      if (urgentDialogInfo.orderIds.length > 1) {
+        setSelectedIds(new Set());
+      }
+    }
+    setUrgentDialogInfo(null);
+    setUrgentReason("");
+  };
+
+  const handlePrice = (order: any) => {
+    if (isMergedChildOrder(order)) {
+      toast.error("当前是组合单子订单，请在组头统一整组定价");
+      return;
+    }
+    setGroupPricingMode(false);
+    setGroupPricingOrders([]);
+    setPricingDialog(order);
+    setPriceValue(order.dispatchPrice ? String(order.dispatchPrice) : "");
+    setPricingRemark("");
+  };
+
+  // 整组定价：同一合并计划号的订单统一定价
+  const handleGroupPrice = (planNumber: string, orders: any[]) => {
+    setGroupPricingMode(true);
+    setGroupPricingOrders(orders);
+    setPricingDialog(orders[0]); // 用第一个订单作为弹窗信息基础
+    setPriceValue("");
+    setPricingRemark("");
+  };
+
+  // 确认整组定价（输入总价，按吨位比例自动分摊到各子订单）
+  const [groupPricingProgress, setGroupPricingProgress] = useState(0);
+  // 计算各子订单按吨位分摊的价格
+  const groupPriceSplits = useMemo(() => {
+    if (!groupPricingMode || groupPricingOrders.length === 0 || !priceValue) return [];
+    const totalPrice = parseFloat(priceValue);
+    if (isNaN(totalPrice) || totalPrice <= 0) return [];
+    const totalWeight = groupPricingOrders.reduce((sum: number, o: any) => sum + (parseFloat(o.weight) || 0), 0);
+    if (totalWeight <= 0) {
+      // 如果没有重量信息，平均分配
+      const avg = totalPrice / groupPricingOrders.length;
+      return groupPricingOrders.map((o: any) => ({ orderId: o.id, orderNumber: o.orderNumber, weight: parseFloat(o.weight) || 0, price: Math.round(avg * 100) / 100 }));
+    }
+    // 按吨位比例分摊，最后一单用差值确保总和精确
+    let remaining = totalPrice;
+    return groupPricingOrders.map((o: any, idx: number) => {
+      const w = parseFloat(o.weight) || 0;
+      if (idx === groupPricingOrders.length - 1) {
+        return { orderId: o.id, orderNumber: o.orderNumber, weight: w, price: Math.round(remaining * 100) / 100 };
+      }
+      const share = Math.round((w / totalWeight) * totalPrice * 100) / 100;
+      remaining -= share;
+      return { orderId: o.id, orderNumber: o.orderNumber, weight: w, price: share };
+    });
+  }, [groupPricingMode, groupPricingOrders, priceValue]);
+
+  const confirmGroupPrice = async () => {
+    if (!priceValue || groupPricingOrders.length === 0) return;
+    const gVal = parseFloat(priceValue);
+    if (isNaN(gVal) || gVal <= 0) {
+      toast.error("调度总价必须为正数");
+      return;
+    }
+    if (groupPriceSplits.length === 0) {
+      toast.error("无法计算分摊价格");
+      return;
+    }
+    setGroupPricingProgress(0);
+    let successCount = 0;
+    for (let i = 0; i < groupPriceSplits.length; i++) {
+      try {
+        await priceAndAssign.mutateAsync({
+          orderId: groupPriceSplits[i].orderId,
+          dispatchPrice: String(groupPriceSplits[i].price),
+          dispatcherRemark: pricingRemark.trim() || undefined,
+        });
+        successCount++;
+      } catch (e: any) {
+        toast.error(`订单 ${groupPriceSplits[i].orderNumber} 定价失败: ${e.message}`);
+      }
+      setGroupPricingProgress(i + 1);
+    }
+    if (successCount > 0) {
+      toast.success(`整组定价完成，总价 ¥${gVal.toFixed(2)} 已按吨位分摊到 ${successCount} 单`);
+    }
+    setPricingDialog(null);
+    setGroupPricingMode(false);
+    setGroupPricingOrders([]);
+    setPriceValue("");
+    setPricingRemark("");
+    setGroupPricingProgress(0);
+    refetchPricing();
+    refetchAll();
+  };
+
+  const confirmPrice = () => {
+    if (!pricingDialog || !priceValue) return;
+    const val = parseFloat(priceValue);
+    if (isNaN(val) || val <= 0) {
+      toast.error("调度价必须为正数");
+      return;
+    }
+    priceAndAssign.mutate({
+      orderId: pricingDialog.id,
+      dispatchPrice: String(val),
+      dispatcherRemark: pricingRemark.trim() || undefined,
+    });
+  };
+
+  const handleManualAssign = (order: any) => {
+    if (isMergedChildOrder(order)) {
+      toast.error("当前是组合单子订单，请在组头统一整组分配调度员");
+      return;
+    }
+    setAssignDialog(order);
+    setSelectedDispatcherId("");
+  };
+
+  const openGroupManualAssign = (orders: any[]) => {
+    const orderIds = orders
+      .map((order: any) => order.id)
+      .filter((id: unknown): id is number => typeof id === "number");
+    setSelectedIds(new Set(orderIds));
+    setBatchAssignDispatcherId("");
+    setBatchAssignOpen(true);
+  };
+
+  const openGroupApprovalDialog = (items: any[], action: "approve" | "reject") => {
+    if (items.length === 1 && isMergedChildOrder(items[0])) {
+      toast.error("当前是组合单子订单，请在组头统一整组审批");
+      return;
+    }
+    const orderIds = items
+      .map((item: any) => item.orderId ?? item.id)
+      .filter((id: unknown): id is number => typeof id === "number");
+    setSelectedIds(new Set(orderIds));
+    setBatchApproveAction(action);
+    setBatchApproveComment("");
+    setBatchApproveOpen(true);
+  };
+
+  const confirmManualAssign = () => {
+    if (!assignDialog || !selectedDispatcherId) return;
+    manualAssign.mutate({
+      orderId: assignDialog.id,
+      dispatcherId: parseInt(selectedDispatcherId),
+    });
+  };
+
+  return (
+    <DashboardLayout>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold flex items-center gap-2">
+              <LayoutDashboard className="h-5 w-5 text-primary" />
+              指挥台
+            </h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              定价 → 区域分配 → 审批，掌控全局订单流转
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {currentSelectedOrderIds.length > 0 && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className={urgentDialogInfo?.action === "clear" ? "text-slate-600 border-slate-300 hover:bg-slate-50" : "text-amber-600 border-amber-300 hover:bg-amber-50"}
+                  onClick={() => openUrgentDialog(currentSelectedOrders, "批量")}
+                >
+                  <Flame className="h-4 w-4 mr-1" />
+                  {currentSelectedOrders.every((order: any) => order.isUrgent) ? `批量取消加急 (${currentSelectedOrderIds.length})` : `批量加急 (${currentSelectedOrderIds.length})`}
+                </Button>
+                {(hasPermission("order.rollback") || hasPermission("order.delete")) && (
+                  <DangerActionMenu
+                    onRollback={hasPermission("order.rollback") ? () => openBatchRollbackDialog(currentSelectedOrderIds) : undefined}
+                    rollbackLabel={`批量退回 (${currentSelectedOrderIds.length})`}
+                    onDelete={hasPermission("order.delete") ? () => openBatchDeleteDialog(currentSelectedOrderIds) : undefined}
+                    deleteLabel={`批量删除 (${currentSelectedOrderIds.length})`}
+                    triggerLabel="更多流程操作"
+                    triggerClassName="h-8 border border-orange-300 px-2 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                  />
+                )}
+              </>
+            )}
+            {activeTab === "manual-assign" && currentSelectedOrderIds.length > 0 && hasPermission("order.assign") && (
+              <Button size="sm" variant="outline" className="text-blue-600 border-blue-300 hover:bg-blue-50" onClick={() => { setBatchAssignOpen(true); setBatchAssignDispatcherId(""); }}>
+                <UserPlus className="h-4 w-4 mr-1" />
+                批量分配调度员 ({currentSelectedOrderIds.length})
+              </Button>
+            )}
+            {activeTab === "overview" && currentSelectedOrderIds.length > 0 && hasPermission("order.assign") && (
+              <Button size="sm" variant="outline" className="text-purple-600 border-purple-300 hover:bg-purple-50" onClick={() => {
+                setGroupReassignInfo(null);
+                setGroupReassignDispatcherId("");
+                setGroupReassignOpen(true);
+              }}>
+                <Layers className="h-4 w-4 mr-1" />
+                整组重新分配 ({currentSelectedOrderIds.length})
+              </Button>
+            )}
+            {activeTab === "approval" && currentSelectedOrderIds.length > 0 && hasPermission("approval.execute") && (
+              <>
+                <Button size="sm" variant="outline" className="text-green-600 border-green-300 hover:bg-green-50" onClick={() => { setBatchApproveAction("approve"); setBatchApproveComment(""); setBatchApproveOpen(true); }}>
+                  <CheckCircle2 className="h-4 w-4 mr-1" />
+                  批量审批通过 ({currentSelectedOrderIds.length})
+                </Button>
+                <Button size="sm" variant="outline" className="text-red-600 border-red-300 hover:bg-red-50" onClick={() => { setBatchApproveAction("reject"); setBatchApproveComment(""); setBatchApproveOpen(true); }}>
+                  <XCircle className="h-4 w-4 mr-1" />
+                  批量驳回 ({currentSelectedOrderIds.length})
+                </Button>
+              </>
+            )}
+            <Button variant="outline" size="sm" onClick={() => { refetchPricing(); refetchApproval(); refetchAll(); }}>
+              <RefreshCw className="h-4 w-4 mr-1" />
+              刷新
+            </Button>
+          </div>
+        </div>
+
+        {/* 发货时效超时醒目预警横幅 */}
+        {timelinessData && (timelinessData.unshipped.between24and48h > 0 || timelinessData.unshipped.over48h > 0) && (
+          <div
+            className="rounded-lg border-2 border-red-400 bg-gradient-to-r from-red-50 via-orange-50 to-yellow-50 p-3 cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => setActiveTab("timeliness")}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-full bg-red-100 animate-pulse">
+                  <Siren className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <div className="font-semibold text-red-800 text-sm">
+                    发货时效警报：{timelinessData.unshipped.over48h > 0 ? `${timelinessData.unshipped.over48h} 单已超时48h` : ''}
+                    {timelinessData.unshipped.over48h > 0 && timelinessData.unshipped.between24and48h > 0 ? '，' : ''}
+                    {timelinessData.unshipped.between24and48h > 0 ? `${timelinessData.unshipped.between24and48h} 单即将超时` : ''}
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    {timelinessData.unshipped.over48h > 0 && <span className="text-xs text-red-600 font-medium">🔴 超时 {timelinessData.unshipped.over48h} 单（违反甲方时效要求）</span>}
+                    {timelinessData.unshipped.between24and48h > 0 && <span className="text-xs text-orange-600 font-medium">🟠 预警 {timelinessData.unshipped.between24and48h} 单（24-48h）</span>}
+                  </div>
+                </div>
+              </div>
+              <Button size="sm" variant="destructive" className="text-xs" onClick={(e) => { e.stopPropagation(); setActiveTab("timeliness"); }}>
+                立即查看
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* 统计卡片 */}
+        <div className="grid grid-cols-4 gap-3">
+          <Card>
+            <CardContent className="p-3 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-orange-100">
+                <DollarSign className="h-4 w-4 text-orange-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">待定价</div>
+                <div className="text-lg font-bold text-orange-600">{pureUnpriced.length}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-3 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-red-100">
+                <UserPlus className="h-4 w-4 text-red-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">待手动分配</div>
+                <div className="text-lg font-bold text-red-600">{pendingManualAssign.length}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-3 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-purple-100">
+                <Clock className="h-4 w-4 text-purple-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">待审批</div>
+                <div className="text-lg font-bold text-purple-600">{approvalItems.length}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-3 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-100">
+                <Truck className="h-4 w-4 text-blue-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">已调度</div>
+                <div className="text-lg font-bold">{stats.inTransit}</div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="border-blue-200 bg-blue-50/70">
+          <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
+                <LayoutDashboard className="h-4 w-4" />
+                外请整理单与自动排单已收口到当前工位
+              </div>
+              <p className="text-xs leading-5 text-blue-800">
+                当前“待定价”队列即整理单入口。主管完成定价后，系统会先按区域自动分配到外请调度；若区域未匹配成功，订单会自动沉淀到“待手动分配”，补指派完成后再进入找车台。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="border-blue-300 text-blue-700 hover:bg-blue-100" onClick={() => setActiveTab("manual-assign")}>
+                <UserPlus className="h-3.5 w-3.5 mr-1" />查看待手动分配
+              </Button>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => setLocation("/station/find-vehicle")}>
+                <Truck className="h-3.5 w-3.5 mr-1" />进入找车台
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Tab 切换 */}
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList>
+            <TabsTrigger value="timeliness">
+              <Clock className="h-4 w-4 mr-1 text-orange-500" />
+              发货时效监控
+              {timelinessData && (timelinessData.unshipped.between24and48h > 0 || timelinessData.unshipped.over48h > 0) && (
+                <Badge variant="destructive" className="ml-1.5 h-4 min-w-4 text-[10px] px-1 animate-pulse">
+                  {timelinessData.unshipped.between24and48h + timelinessData.unshipped.over48h}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="pricing">
+              整理单 / 待定价
+              {pureUnpriced.length > 0 && (
+                <Badge variant="destructive" className="ml-1.5 h-4 min-w-4 text-[10px] px-1">
+                  {pureUnpriced.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="manual-assign">
+              自动排单失败 / 待手动分配
+              {pendingManualAssign.length > 0 && (
+                <Badge variant="destructive" className="ml-1.5 h-4 min-w-4 text-[10px] px-1">
+                  {pendingManualAssign.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="approval">
+              待审批
+              {approvalItems.length > 0 && (
+                <Badge variant="destructive" className="ml-1.5 h-4 min-w-4 text-[10px] px-1">
+                  {approvalItems.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="overview">全局概览</TabsTrigger>
+          </TabsList>
+
+          {/* 待定价队列 */}
+          <TabsContent value="pricing">
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8">
+                        <Checkbox
+                          checked={currentSelectableOrderIds.length > 0 && currentSelectableOrderIds.every((id) => selectedIds.has(id))}
+                          onCheckedChange={() => {
+                            if (currentSelectableOrderIds.every((id) => selectedIds.has(id))) setSelectedIds(new Set());
+                            else setSelectedIds(new Set(currentSelectableOrderIds));
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>客户订单号</TableHead>
+                      <TableHead>客户 · 货物</TableHead>
+                      <TableHead>路线</TableHead>
+                      <TableHead>吨位</TableHead>
+                      <TableHead>下单日期</TableHead>
+                      <TableHead>紧急</TableHead>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pricingVisibleOrders.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                          <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-400" />
+                          暂无待定价订单
+                        </TableCell>
+                      </TableRow>
+                    ) : pricingDisplayGrouped ? (
+                      <>
+                        {Array.from(pricingDisplayGrouped.groups.entries()).map(([planNumber, groupOrders]) => {
+                          const isExpanded = pricingExpanded.has(planNumber);
+                          const totalWeight = groupOrders.reduce((sum: number, o: any) => sum + parseFloat(o.weight || "0"), 0);
+                          const totalCustomerPrice = groupOrders.reduce((sum: number, o: any) => sum + parseFloat(o.customerPrice || "0"), 0);
+                          const hasUrgent = groupOrders.some((o: any) => o.isUrgent);
+                          const firstDate = groupOrders[0]?.orderDate || groupOrders[0]?.createdAt;
+                          return (
+                            <React.Fragment key={planNumber}>
+                              <TableRow
+                                className={[hasUrgent ? "bg-red-50/60" : "bg-blue-50/40", "cursor-pointer border-l-4 border-l-blue-400 hover:bg-blue-100/70"].join(" ")}
+                                onClick={() => togglePricingGroup(planNumber)}
+                              >
+                                <TableCell onClick={(event) => event.stopPropagation()}>
+                                  <Checkbox
+                                    checked={groupOrders.every((o: any) => selectedIds.has(o.id))}
+                                    onCheckedChange={() => toggleSelectMany(groupOrders.map((o: any) => o.id))}
+                                  />
+                                </TableCell>
+                                <TableCell className="table-cell-readable font-mono text-xs align-top">
+                                  <div className="flex flex-col gap-1.5">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 text-[10px] text-blue-700 hover:text-blue-800"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          togglePricingGroup(planNumber);
+                                        }}
+                                        title={isExpanded ? "收起组合单" : "展开组合单"}
+                                      >
+                                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                        <Badge variant="outline" className="border-blue-300 bg-blue-100 px-1.5 text-[10px] text-blue-700">
+                                          同批 {groupOrders.length} 单
+                                        </Badge>
+                                      </button>
+                                      <Badge variant="secondary" className="border border-blue-200 bg-white text-blue-700">整组</Badge>
+                                      <span className="font-semibold text-slate-900">{planNumber}</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-600">{getGroupCustomerCargoSummary(groupOrders)}</div>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-xs">{getGroupCustomerCargoSummary(groupOrders)}</TableCell>
+                                <TableCell className="text-sm">{getGroupRouteSummary(groupOrders)}</TableCell>
+                                <TableCell className="text-sm font-bold text-blue-700">{totalWeight.toFixed(3)}t</TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                  <div>{firstDate ? fmtShort(firstDate) : "-"}</div>
+                                  {totalCustomerPrice > 0 && (
+                                    <div className="text-[10px] text-green-600">客户报价合计 {formatMoney(String(totalCustomerPrice))}</div>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  {hasUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                                </TableCell>
+                                <TableCell onClick={(event) => event.stopPropagation()}>
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className={hasUrgent ? "border-slate-300 text-slate-600 hover:bg-slate-50" : "border-amber-300 text-amber-600 hover:bg-amber-50"}
+                                      onClick={() => openUrgentDialog(groupOrders, `整组 ${planNumber}`)}
+                                    >
+                                      <Flame className="h-3 w-3 mr-1" />
+                                      {hasUrgent ? "取消加急" : "加急"}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      className="bg-blue-600 hover:bg-blue-700"
+                                      onClick={() => handleGroupPrice(planNumber, groupOrders)}
+                                    >
+                                      <Layers className="h-3 w-3 mr-1" />定价
+                                    </Button>
+                                    {hasPermission("order.rollback") && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-orange-500 hover:text-orange-600 h-7 w-7 p-0"
+                                        onClick={() => openBatchRollbackDialog(groupOrders.map((order: any) => order.id))}
+                                        title="整组退回"
+                                      >
+                                        <Undo2 className="h-3.5 w-3.5" />
+                                      </Button>
+                                    )}
+                                    {hasPermission("order.delete") && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-destructive hover:text-destructive h-7 w-7 p-0"
+                                        onClick={() => openBatchDeleteDialog(groupOrders.map((order: any) => order.id))}
+                                        title="整组删除"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                              {isExpanded && groupOrders.map((order: any) => (
+                                <TableRow key={order.id} className={`${order.isUrgent ? "bg-red-50/50" : "bg-blue-50/30"} border-l-2 border-l-blue-200`}>
+                                  <TableCell className="text-center text-xs text-muted-foreground">—</TableCell>
+                                  <TableCell className="table-cell-readable font-mono text-xs align-top">
+                                    <div className="flex flex-col gap-1">
+                                      <div><span className="text-muted-foreground pl-2">└</span> {order.orderNumber || order.systemCode}</div>
+                                      {renderOutsourceSuborderPreview(order)}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-xs">{order.customerName} · {order.cargoName}</TableCell>
+                                  <TableCell className="text-xs">
+                                    <span className="flex items-center gap-1">
+                                      {order.originCity || "-"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "-"}
+                                    </span>
+                                  </TableCell>
+                                  <TableCell className="text-xs">{order.weight ? `${order.weight}t` : "-"}</TableCell>
+                                  <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                    <div>{fmtShort(order.orderDate || order.createdAt)}</div>
+                                    {order.customerPrice && <div className="text-[10px] text-green-600">{formatMoney(order.customerPrice)}</div>}
+                                  </TableCell>
+                                  <TableCell>
+                                    {order.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                                  </TableCell>
+                                  <TableCell>
+                                    <span className="text-xs text-muted-foreground">{pricingGroupGuide.childHint}</span>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </React.Fragment>
+                          );
+                        })}
+                        {pricingDisplayGrouped.ungrouped.map((order: any) => (
+                          <TableRow key={order.id} className={order.isUrgent ? "bg-red-50/50" : ""}>
+                            <TableCell>
+                              <Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} />
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              <div className="flex flex-col gap-1">
+                                <div>{order.orderNumber || order.systemCode}</div>
+                                {renderOutsourceSuborderPreview(order)}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-sm">{order.customerName}</div>
+                              <div className="text-xs text-muted-foreground">{order.cargoName}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1 text-xs">
+                                {order.originCity || "-"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "-"}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-xs">{order.weight ? `${order.weight}t` : "-"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{fmtDate(order.orderDate)}</TableCell>
+                            <TableCell>
+                              {order.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Button size="sm" onClick={() => handlePrice(order)}>
+                                  <DollarSign className="h-3 w-3 mr-1" />定价
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className={order.isUrgent ? "text-slate-500 hover:text-slate-600 h-7 w-7 p-0" : "text-amber-500 hover:text-amber-600 h-7 w-7 p-0"}
+                                  onClick={() => openUrgentDialog([order], order.orderNumber || order.systemCode || `#${order.id}`)}
+                                  title={order.isUrgent ? "取消加急" : "标记加急"}
+                                >
+                                  <Flame className="h-3.5 w-3.5" />
+                                </Button>
+                                <DangerActionMenu
+                                  onRollback={hasPermission("order.rollback") ? () => openRollbackDialog(order) : undefined}
+                                  rollbackDisabled={Boolean(getRollbackLockReason(order))}
+                                  onDelete={hasPermission("order.delete") ? () => openDeleteDialog(order) : undefined}
+                                  deleteDisabled={Boolean(getDeleteLockReason(order))}
+                                />
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </>
+                    ) : (
+                      pricingVisibleOrders.map((order: any) => (
+                        <TableRow key={order.id} className={order.isUrgent ? "bg-red-50/50" : ""}>
+                          <TableCell>
+                            <Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} />
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <div className="flex flex-col gap-1">
+                              <div>{order.orderNumber || order.systemCode}</div>
+                              {renderOutsourceSuborderPreview(order)}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm">{order.customerName}</div>
+                            <div className="text-xs text-muted-foreground">{order.cargoName}</div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1 text-xs">
+                              {order.originCity || "-"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "-"}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs">{order.weight ? `${order.weight}t` : "-"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{fmtDate(order.orderDate)}</TableCell>
+                          <TableCell>
+                            {order.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button size="sm" onClick={() => handlePrice(order)}>
+                                <DollarSign className="h-3 w-3 mr-1" />定价
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className={order.isUrgent ? "text-slate-500 hover:text-slate-600 h-7 w-7 p-0" : "text-amber-500 hover:text-amber-600 h-7 w-7 p-0"}
+                                onClick={() => openUrgentDialog([order], order.orderNumber || order.systemCode || `#${order.id}`)}
+                                title={order.isUrgent ? "取消加急" : "标记加急"}
+                              >
+                                <Flame className="h-3.5 w-3.5" />
+                              </Button>
+                              <DangerActionMenu
+                                onRollback={hasPermission("order.rollback") ? () => openRollbackDialog(order) : undefined}
+                                rollbackDisabled={Boolean(getRollbackLockReason(order))}
+                                onDelete={hasPermission("order.delete") ? () => openDeleteDialog(order) : undefined}
+                                deleteDisabled={Boolean(getDeleteLockReason(order))}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* 待手动分配队列 */}
+          <TabsContent value="manual-assign">
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8">
+                        <Checkbox
+                          checked={currentSelectableOrderIds.length > 0 && currentSelectableOrderIds.every((id) => selectedIds.has(id))}
+                          onCheckedChange={() => {
+                            if (currentSelectableOrderIds.every((id) => selectedIds.has(id))) setSelectedIds(new Set());
+                            else setSelectedIds(new Set(currentSelectableOrderIds));
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>客户订单号</TableHead>
+                      <TableHead>客户 · 货物</TableHead>
+                      <TableHead>路线</TableHead>
+                      <TableHead>定价</TableHead>
+                      <TableHead>下单日期</TableHead>
+                      <TableHead>紧急</TableHead>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {manualVisibleOrders.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                          <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-400" />
+                          暂无待手动分配订单
+                        </TableCell>
+                      </TableRow>
+                    ) : manualDisplayGrouped ? (
+                      <>
+                        {Array.from(manualDisplayGrouped.groups.entries()).map(([planNumber, groupOrders]) => {
+                          const isExpanded = manualExpanded.has(planNumber);
+                          const totalWeight = groupOrders.reduce((sum: number, o: any) => sum + parseFloat(o.weight || "0"), 0);
+                          const totalDispatchPrice = groupOrders.reduce((sum: number, o: any) => sum + parseFloat(o.dispatchPrice || "0"), 0);
+                          const hasUrgent = groupOrders.some((o: any) => o.isUrgent);
+                          const firstDate = groupOrders[0]?.orderDate || groupOrders[0]?.createdAt;
+                          return (
+                            <React.Fragment key={planNumber}>
+                              <TableRow
+                                className={[hasUrgent ? "bg-red-50/60" : "bg-blue-50/40", "cursor-pointer border-l-4 border-l-blue-400 hover:bg-blue-100/70"].join(" ")}
+                                onClick={() => toggleManualGroup(planNumber)}
+                              >
+                                <TableCell onClick={(event) => event.stopPropagation()}>
+                                  <Checkbox
+                                    checked={groupOrders.every((order: any) => selectedIds.has(order.id))}
+                                    onCheckedChange={() => toggleSelectMany(groupOrders.map((order: any) => order.id))}
+                                  />
+                                </TableCell>
+                                <TableCell className="table-cell-readable font-mono text-xs align-top">
+                                  <div className="flex flex-col gap-1.5">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 text-[10px] text-blue-700 hover:text-blue-800"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          toggleManualGroup(planNumber);
+                                        }}
+                                        title={isExpanded ? "收起组合单" : "展开组合单"}
+                                      >
+                                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                        <Badge variant="outline" className="border-blue-300 bg-blue-100 px-1.5 text-[10px] text-blue-700">
+                                          同批 {groupOrders.length} 单
+                                        </Badge>
+                                      </button>
+                                      <Badge variant="secondary" className="border border-blue-200 bg-white text-blue-700">整组</Badge>
+                                      <span className="font-semibold text-slate-900">{planNumber}</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-600">{getGroupCustomerCargoSummary(groupOrders)}</div>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-xs">{getGroupCustomerCargoSummary(groupOrders)}</TableCell>
+                                <TableCell className="text-sm">{getGroupRouteSummary(groupOrders)}</TableCell>
+                                <TableCell className="text-xs text-orange-600">
+                                  <div className="font-semibold">{totalDispatchPrice > 0 ? formatMoney(String(totalDispatchPrice)) : "-"}</div>
+                                  <div className="text-[10px] text-blue-700">总重 {totalWeight.toFixed(3)}t</div>
+                                </TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">{firstDate ? fmtShort(firstDate) : "-"}</TableCell>
+                                <TableCell>
+                                  {hasUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                                </TableCell>
+                                <TableCell onClick={(event) => event.stopPropagation()}>
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className={hasUrgent ? "border-slate-300 text-slate-600 hover:bg-slate-50" : "border-amber-300 text-amber-600 hover:bg-amber-50"}
+                                      onClick={() => openUrgentDialog(groupOrders, `整组 ${planNumber}`)}
+                                    >
+                                      <Flame className="h-3 w-3 mr-1" />
+                                      {hasUrgent ? "取消加急" : "加急"}
+                                    </Button>
+                                    <Button size="sm" variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-100" onClick={() => openGroupManualAssign(groupOrders)}>
+                                      <Layers className="h-3 w-3 mr-1" />分配调度员
+                                    </Button>
+                                    <DangerActionMenu
+                                      onRollback={hasPermission("order.rollback") ? () => openBatchRollbackDialog(groupOrders.map((order: any) => order.id)) : undefined}
+                                      rollbackLabel="整组退回"
+                                      onDelete={hasPermission("order.delete") ? () => openBatchDeleteDialog(groupOrders.map((order: any) => order.id)) : undefined}
+                                      deleteLabel="整组删除"
+                                    />
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                              {isExpanded && groupOrders.map((order: any) => (
+                                <TableRow key={order.id} className={`${order.isUrgent ? "bg-red-50/50" : "bg-blue-50/30"} border-l-2 border-l-blue-200`}>
+                                  <TableCell className="text-center text-xs text-muted-foreground">—</TableCell>
+                                  <TableCell className="table-cell-readable font-mono text-xs align-top">
+                                    <div className="flex flex-col gap-1">
+                                      <div><span className="text-muted-foreground pl-2">└</span> {order.orderNumber || order.systemCode}</div>
+                                      {renderOutsourceSuborderPreview(order)}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-xs">{order.customerName} · {order.cargoName}</TableCell>
+                                  <TableCell className="text-xs">
+                                    <span className="flex items-center gap-1">
+                                      {order.originCity || "-"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "-"}
+                                    </span>
+                                  </TableCell>
+                                  <TableCell className="text-xs font-medium text-orange-600">{formatMoney(order.dispatchPrice)}</TableCell>
+                                  <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">{fmtShort(order.orderDate || order.createdAt)}</TableCell>
+                                  <TableCell>
+                                    {order.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                                  </TableCell>
+                                  <TableCell>
+                                    <span className="text-xs text-muted-foreground">{manualGroupGuide.childHint}</span>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </React.Fragment>
+                          );
+                        })}
+                        {manualDisplayGrouped.ungrouped.map((order: any) => (
+                          <TableRow key={order.id} className={order.isUrgent ? "bg-red-50/50" : ""}>
+                            <TableCell>
+                              <Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} />
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              <div className="flex flex-col gap-1">
+                                <div>{order.orderNumber || order.systemCode}</div>
+                                {renderOutsourceSuborderPreview(order)}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-sm">{order.customerName}</div>
+                              <div className="text-xs text-muted-foreground">{order.cargoName}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1 text-xs">
+                                {order.originCity || "-"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "-"}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-sm font-medium text-orange-600">{formatMoney(order.dispatchPrice)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{fmtDate(order.orderDate)}</TableCell>
+                            <TableCell>
+                              {order.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Button size="sm" variant="outline" onClick={() => handleManualAssign(order)}>
+                                  <UserPlus className="h-3 w-3 mr-1" />分配调度员
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className={order.isUrgent ? "text-slate-500 hover:text-slate-600 h-7 w-7 p-0" : "text-amber-500 hover:text-amber-600 h-7 w-7 p-0"}
+                                  onClick={() => openUrgentDialog([order], order.orderNumber || order.systemCode || `#${order.id}`)}
+                                  title={order.isUrgent ? "取消加急" : "标记加急"}
+                                >
+                                  <Flame className="h-3.5 w-3.5" />
+                                </Button>
+                                <DangerActionMenu
+                                  onRollback={hasPermission("order.rollback") ? () => openRollbackDialog(order) : undefined}
+                                  rollbackDisabled={Boolean(getRollbackLockReason(order))}
+                                  onDelete={hasPermission("order.delete") ? () => openDeleteDialog(order) : undefined}
+                                  deleteDisabled={Boolean(getDeleteLockReason(order))}
+                                />
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </>
+                    ) : (
+                      manualVisibleOrders.map((order: any) => (
+                        <TableRow key={order.id} className={order.isUrgent ? "bg-red-50/50" : ""}>
+                          <TableCell>
+                            <Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} />
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <div className="flex flex-col gap-1">
+                              <div>{order.orderNumber || order.systemCode}</div>
+                              {renderOutsourceSuborderPreview(order)}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm">{order.customerName}</div>
+                            <div className="text-xs text-muted-foreground">{order.cargoName}</div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1 text-xs">
+                              {order.originCity || "-"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "-"}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm font-medium text-orange-600">{formatMoney(order.dispatchPrice)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{fmtDate(order.orderDate)}</TableCell>
+                          <TableCell>
+                            {order.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button size="sm" variant="outline" onClick={() => handleManualAssign(order)}>
+                                <UserPlus className="h-3 w-3 mr-1" />分配调度员
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className={order.isUrgent ? "text-slate-500 hover:text-slate-600 h-7 w-7 p-0" : "text-amber-500 hover:text-amber-600 h-7 w-7 p-0"}
+                                onClick={() => openUrgentDialog([order], order.orderNumber || order.systemCode || `#${order.id}`)}
+                                title={order.isUrgent ? "取消加急" : "标记加急"}
+                              >
+                                <Flame className="h-3.5 w-3.5" />
+                              </Button>
+                              <DangerActionMenu
+                                onRollback={hasPermission("order.rollback") ? () => openRollbackDialog(order) : undefined}
+                                rollbackDisabled={Boolean(getRollbackLockReason(order))}
+                                onDelete={hasPermission("order.delete") ? () => openDeleteDialog(order) : undefined}
+                                deleteDisabled={Boolean(getDeleteLockReason(order))}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* 待审批队列 */}
+          <TabsContent value="approval">
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8">
+                        <Checkbox
+                          checked={currentSelectableOrderIds.length > 0 && currentSelectableOrderIds.every((id) => selectedIds.has(id))}
+                          onCheckedChange={() => {
+                            if (currentSelectableOrderIds.every((id) => selectedIds.has(id))) setSelectedIds(new Set());
+                            else setSelectedIds(new Set(currentSelectableOrderIds));
+                          }}
+                        />
+                      </TableHead>
+                      <TableHead>客户订单号</TableHead>
+                      <TableHead className="w-[240px]">审批重点</TableHead>
+                      <TableHead className="w-[140px]">路线</TableHead>
+                      <TableHead className="w-[220px]">价格决策</TableHead>
+                      <TableHead className="w-[100px]">申请人</TableHead>
+                      <TableHead className="w-[72px]">紧急</TableHead>
+                      <TableHead className="w-[220px]">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {approvalItems.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                          <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-400" />
+                          暂无待审批事项
+                        </TableCell>
+                      </TableRow>
+                    ) : approvalDisplayGrouped ? (
+                      <>
+                        {Array.from(approvalDisplayGrouped.groups.entries()).map(([planNumber, items]) => {
+                          const isExpanded = approvalExpanded.has(planNumber);
+                          const totalRequested = items.reduce((sum: number, item: any) => sum + Number(item.requestedAmount || 0), 0);
+                          const hasUrgent = items.some((item: any) => item.isUrgent);
+                          const itemOrderIds = items
+                            .map((item: any) => item.orderId ?? item.id)
+                            .filter((id: unknown): id is number => typeof id === "number");
+                          const isMergedGroup = items.length > 1;
+                          const carrierOrder = items.reduce((foundCarrier: any, item: any) => {
+                            if (foundCarrier) return foundCarrier;
+                            const itemOrderId = item.orderId ?? item.id;
+                            if (typeof itemOrderId !== "number") return foundCarrier;
+                            const preview = overviewOutsourceSuborderPreviewMap.get(itemOrderId);
+                            if (!preview || preview.parentOrders.length === 0) return foundCarrier;
+                            const matchedParentOrder = preview.parentOrders.find((parentOrder: any) => {
+                              if (!parentOrder) return false;
+                              if (planNumber === `前段外请主单#${parentOrder.id}`) return true;
+                              const parentMergedPlanNumber = typeof parentOrder.mergedPlanNumber === "string"
+                                ? parentOrder.mergedPlanNumber.trim()
+                                : "";
+                              return parentMergedPlanNumber ? parentMergedPlanNumber === planNumber : false;
+                            }) ?? preview.parentOrders[0];
+                            return matchedParentOrder ?? foundCarrier;
+                          }, approvalGroupCarrierMap.get(planNumber) ?? null);
+                          const carrierOrderId = typeof carrierOrder?.id === "number" ? carrierOrder.id : null;
+                          const leadApprovalItem = items[0];
+                          const leadItem = carrierOrder ?? leadApprovalItem;
+                          const leadHistoryOrderId = carrierOrderId
+                            ?? (typeof leadApprovalItem?.orderId === "number"
+                              ? leadApprovalItem.orderId
+                              : typeof leadApprovalItem?.id === "number"
+                                ? leadApprovalItem.id
+                                : null);
+                          const childItems = carrierOrderId !== null
+                            ? items.filter((item: any) => (item.orderId ?? item.id) !== carrierOrderId)
+                            : items;
+                          const childOrderCount = childItems.length;
+                          const leadDisplayTitle = carrierOrder
+                            ? (carrierOrder.orderNumber || carrierOrder.systemCode || `#${carrierOrderId}`)
+                            : planNumber;
+                          const leadRouteSummary = carrierOrder?.originCity || carrierOrder?.destinationCity
+                            ? `${carrierOrder.originCity || "-"} → ${carrierOrder.destinationCity || "-"}`
+                            : getGroupRouteSummary(items);
+                          const allSelected = itemOrderIds.length > 0 && itemOrderIds.every((id) => selectedIds.has(id));
+                          const leadHistoryExpanded = typeof leadHistoryOrderId === "number" && expandedApprovalHistoryOrderIds.has(leadHistoryOrderId);
+                          const leadSupplementNote = getApprovalGroupRemarkSummary(items);
+                          if (!isMergedGroup || typeof leadHistoryOrderId !== "number") {
+                            return null;
+                          }
+
+                          return (
+                            <React.Fragment key={planNumber}>
+                              <TableRow className={[hasUrgent ? "bg-red-50/60" : "bg-blue-50/40", "border-l-4 border-l-blue-400"].join(" ")}>
+                                <TableCell>
+                                  <Checkbox
+                                    checked={allSelected}
+                                    onCheckedChange={() => {
+                                      setSelectedIds((prev) => {
+                                        const next = new Set(prev);
+                                        if (allSelected) itemOrderIds.forEach((id) => next.delete(id));
+                                        else itemOrderIds.forEach((id) => next.add(id));
+                                        return next;
+                                      });
+                                    }}
+                                    aria-label={`选择组合主单 ${leadDisplayTitle}`}
+                                  />
+                                </TableCell>
+                                <TableCell className="table-cell-readable font-mono text-xs align-top">
+                                  <div className="flex flex-col gap-2">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 text-[10px] text-blue-700 hover:text-blue-800"
+                                        onClick={() => toggleApprovalGroup(planNumber)}
+                                        title={isExpanded ? "收起组合单" : "展开组合单"}
+                                      >
+                                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                        <Badge variant="outline" className="border-blue-300 bg-blue-100 px-1.5 text-[10px] text-blue-700">
+                                          同批 {items.length} 单
+                                        </Badge>
+                                      </button>
+                                      <Badge variant="secondary" className="border border-blue-200 bg-white text-blue-700">
+                                        {carrierOrder ? "主单" : "组合主单"}
+                                      </Badge>
+                                      <span className="font-semibold text-slate-900">{leadDisplayTitle}</span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-600">
+                                      {getGroupCustomerCargoSummary(items)}
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="table-cell-readable align-top text-xs">
+                                  <div className="space-y-2">
+                                    <ApprovalDecisionBadges items={items} />
+                                    {leadSupplementNote ? (
+                                      <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-900">
+                                        {leadSupplementNote}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  <div className="space-y-1">
+                                    <span className="flex items-center gap-1">
+                                      {leadRouteSummary}
+                                    </span>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="table-cell-readable align-top text-xs">
+                                  <div className="space-y-2">
+                                    <ApprovalPriceComparison item={leadApprovalItem} items={items} />
+                                  </div>
+                                </TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                  {getApprovalApplicants(items)}
+                                </TableCell>
+                                <TableCell>
+                                  {hasUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                                </TableCell>
+                                <TableCell className="align-top">
+                                  <div className="flex min-w-0 flex-col items-stretch gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className={hasUrgent ? "h-7 w-full justify-center border-slate-300 px-2 text-[11px] text-slate-600 hover:bg-slate-50" : "h-7 w-full justify-center border-amber-300 px-2 text-[11px] text-amber-600 hover:bg-amber-50"}
+                                      onClick={() => openUrgentDialog(items, `整组 ${planNumber}`)}
+                                    >
+                                      <Flame className="mr-1 h-3 w-3" />
+                                      {hasUrgent ? "取消加急" : "加急"}
+                                    </Button>
+                                    <Button size="sm" className="h-7 w-full justify-center bg-green-600 px-2 text-[11px] text-white hover:bg-green-700" onClick={() => openGroupApprovalDialog(items, "approve")}>
+                                      <CheckCircle2 className="mr-1 h-3 w-3" />通过
+                                    </Button>
+                                    <Button size="sm" variant="outline" className="h-7 w-full justify-center border-red-300 px-2 text-[11px] text-red-600 hover:bg-red-50" onClick={() => openGroupApprovalDialog(items, "reject")}>
+                                      <XCircle className="mr-1 h-3 w-3" />驳回
+                                    </Button>
+                                    <div className="flex items-center justify-center gap-1 pt-0.5">
+                                      <DangerActionMenu
+                                        onRollback={hasPermission("order.rollback") ? () => openBatchRollbackDialog(itemOrderIds) : undefined}
+                                        rollbackLabel="整组退回"
+                                        onDelete={hasPermission("order.delete") ? () => openBatchDeleteDialog(itemOrderIds) : undefined}
+                                        deleteLabel="整组删除"
+                                      />
+                                    </div>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                              <TableRow className="bg-slate-50/25">
+                                <TableCell colSpan={8} className="px-4 py-2">
+                                  <div className="pl-5 pr-2">
+                                    <ApprovalSummaryContent
+                                      item={leadApprovalItem}
+                                      items={items}
+                                      itemOrderId={leadHistoryOrderId}
+                                    />
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+
+                            </React.Fragment>
+                          );
+                        })}
+                        {approvalDisplayGrouped.ungrouped.map((item: any) => {
+                          const itemOrderId = item.orderId ?? item.id;
+                          return (
+                            <React.Fragment key={item.id}>
+                              <TableRow className={item.isUrgent ? "bg-red-50/50" : ""}>
+                              <TableCell>
+                                <Checkbox checked={selectedIds.has(itemOrderId)} onCheckedChange={() => toggleSelect(itemOrderId)} />
+                              </TableCell>
+                              <TableCell className="font-mono text-xs">
+                                <div className="flex flex-col gap-1">
+                                  <div>{item.orderNumber || item.systemCode || `#${item.orderId}`}</div>
+                                  {renderOutsourceSuborderPreview(item)}
+                                </div>
+                              </TableCell>
+                              <TableCell className="align-top text-xs">
+                                <div className="space-y-2">
+                                  <ApprovalDecisionBadges items={[item]} />
+                                  <div className="text-[11px] leading-5 text-slate-600">
+                                    {`当前为${getApprovalTypeLabel(item.approvalType)}审批`}
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-xs">
+                                <span className="flex items-center gap-1">
+                                  {item.originCity || "-"} <ArrowRight className="h-3 w-3" /> {item.destinationCity || "-"}
+                                </span>
+                              </TableCell>
+                              <TableCell className="align-top text-xs">
+                                <ApprovalPriceComparison item={item} />
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{item.applicantName || "-"}</TableCell>
+                              <TableCell>
+                                {item.isUrgent && <Badge variant="destructive" className="text-[10px]">加急</Badge>}
+                              </TableCell>
+                              <TableCell className="align-top">
+                                <div className="flex min-w-0 flex-col items-stretch gap-1">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className={item.isUrgent ? "h-7 w-full justify-center border-slate-300 px-2 text-[11px] text-slate-600 hover:bg-slate-50" : "h-7 w-full justify-center border-amber-300 px-2 text-[11px] text-amber-600 hover:bg-amber-50"}
+                                    onClick={() => openUrgentDialog([item], item.orderNumber || item.systemCode || `#${itemOrderId}`)}
+                                    title={item.isUrgent ? "取消加急" : "标记加急"}
+                                  >
+                                    <Flame className="mr-1 h-3 w-3" />
+                                    {item.isUrgent ? "取消加急" : "加急"}
+                                  </Button>
+                                  <Button size="sm" className="h-7 w-full justify-center bg-green-600 px-2 text-[11px] text-white hover:bg-green-700" onClick={() => openGroupApprovalDialog([item], "approve")}>
+                                    <CheckCircle2 className="mr-1 h-3 w-3" />通过
+                                  </Button>
+                                  <Button size="sm" variant="outline" className="h-7 w-full justify-center border-red-300 px-2 text-[11px] text-red-600 hover:bg-red-50" onClick={() => openGroupApprovalDialog([item], "reject")}>
+                                    <XCircle className="mr-1 h-3 w-3" />驳回
+                                  </Button>
+                                  <div className="flex items-center justify-center gap-1 pt-0.5">
+                                    <DangerActionMenu
+                                      onRollback={hasPermission("order.rollback") ? () => openRollbackDialog(item, itemOrderId) : undefined}
+                                      rollbackDisabled={Boolean(getRollbackLockReason(item))}
+                                      onDelete={hasPermission("order.delete") ? () => openDeleteDialog(item, itemOrderId) : undefined}
+                                      deleteDisabled={Boolean(getDeleteLockReason(item))}
+                                    />
+                                  </div>
+                                </div>
+                              </TableCell>
+                              </TableRow>
+                              <TableRow className="bg-slate-50/40">
+                                <TableCell colSpan={8} className="px-4 py-3">
+                                  <div className="pl-5 pr-2">
+                                    <ApprovalSummaryContent
+                                      item={item}
+                                      itemOrderId={itemOrderId}
+                                    />
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            </React.Fragment>
+                          );
+                        })}
+                      </>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* 全局概览 */}
+          <TabsContent value="overview">
+            <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
+              <div className="font-medium">全局概览为公共视图，不代表唯一归属工位。</div>
+              <div className="mt-1 text-sky-800">
+                列表中会同步展示订单当前主状态、主归属工作台与公共视图展示原因；如需继续处理，请跳转到对应正式工作台执行。
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <Input
+                placeholder="搜索订单号/客户/货物/路线/车牌/司机..."
+                value={globalSearch}
+                onChange={(e) => setGlobalSearch(e.target.value)}
+                className="h-8 w-64 text-sm"
+              />
+              <Select value={globalFilterType} onValueChange={setGlobalFilterType}>
+                <SelectTrigger className="h-8 w-28 text-xs">
+                  <SelectValue placeholder="业务类型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部类型</SelectItem>
+                  <SelectItem value="outsource">外请</SelectItem>
+                  <SelectItem value="self">自运</SelectItem>
+                  <SelectItem value="ltl">零担</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={globalFilterStatus} onValueChange={setGlobalFilterStatus}>
+                <SelectTrigger className="h-8 w-28 text-xs">
+                  <SelectValue placeholder="订单状态" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="pending_price">待定价</SelectItem>
+                  <SelectItem value="pending_dispatch">待指派</SelectItem>
+                  <SelectItem value="dispatching">待找车</SelectItem>
+                  <SelectItem value="dispatched">已调度</SelectItem>
+                  <SelectItem value="delivered">已送达</SelectItem>
+                  <SelectItem value="signed">已签收</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant={overviewGroupByPlan ? "default" : "outline"}
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setOverviewGroupByPlan(!overviewGroupByPlan)}
+              >
+                {overviewGroupByPlan ? <Layers className="h-3 w-3 mr-1" /> : <List className="h-3 w-3 mr-1" />}
+                {overviewGroupByPlan ? "分组" : "列表"}
+              </Button>
+              {(globalSearch || globalFilterType !== "all" || globalFilterStatus !== "all") && (
+                <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={() => { setGlobalSearch(""); setGlobalFilterType("all"); setGlobalFilterStatus("all"); }}>
+                  清除筛选
+                </Button>
+              )}
+              <span className="text-xs text-muted-foreground ml-auto">共 {allOrders.length} 条{allOrders.length !== allOrdersRaw.length ? ` / 全部 ${allOrdersRaw.length} 条` : ""}</span>
+            </div>
+            <Card>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8"><Checkbox checked={sortedAllOrders.length > 0 && sortedAllOrders.every(o => selectedIds.has(o.id))} onCheckedChange={() => { if (sortedAllOrders.every(o => selectedIds.has(o.id))) setSelectedIds(new Set()); else setSelectedIds(new Set(sortedAllOrders.map(o => o.id))); }} /></TableHead>
+                      <TableHead>客户订单号</TableHead>
+                      <SortableHeader sortKey="businessType" currentSort={overviewSort} onToggle={toggleOverviewSort}>类型</SortableHeader>
+                      <SortableHeader sortKey="customerName" currentSort={overviewSort} onToggle={toggleOverviewSort}>客户·货物</SortableHeader>
+                      <TableHead>路线</TableHead>
+                      <SortableHeader sortKey="weight" currentSort={overviewSort} onToggle={toggleOverviewSort}>吨位</SortableHeader>
+                      <SortableHeader sortKey="dispatchPrice" currentSort={overviewSort} onToggle={toggleOverviewSort}>调度价</SortableHeader>
+                      <SortableHeader sortKey="actualFreight" currentSort={overviewSort} onToggle={toggleOverviewSort}>执行价</SortableHeader>
+                      <SortableHeader sortKey="status" currentSort={overviewSort} onToggle={toggleOverviewSort}>状态</SortableHeader>
+                      <TableHead>区域</TableHead>
+                      <TableHead>调度员</TableHead>
+                      <TableHead>找车用时</TableHead>
+                      <SortableHeader sortKey="createdAt" currentSort={overviewSort} onToggle={toggleOverviewSort}>时间</SortableHeader>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedAllOrders.length === 0 ? (
+                      <TableRow>
+                          <TableCell colSpan={14} className="text-center py-8 text-muted-foreground">
+                          暂无订单
+                        </TableCell>
+                      </TableRow>
+                    ) : overviewGroupByPlan && overviewGrouped ? (
+                      <>
+                        {Array.from(overviewGrouped.groups.entries()).map(([planNumber, groupOrders]) => {
+                          const isExpanded = overviewExpanded.has(planNumber);
+                          const totalWeight = groupOrders.reduce((sum: number, o: any) => sum + parseFloat(o.weight || "0"), 0);
+                          const destinations = Array.from(new Set(groupOrders.map((o: any) => o.destinationCity).filter(Boolean)));
+                          const statusCounts: Record<string, number> = {};
+                          groupOrders.forEach((o: any) => { statusCounts[o.status] = (statusCounts[o.status] || 0) + 1; });
+                          return (
+                            <React.Fragment key={planNumber}>
+                              <TableRow
+                                className="bg-blue-50 hover:bg-blue-100/80 cursor-pointer border-l-2 border-l-blue-500"
+                                onClick={() => toggleOverviewGroup(planNumber)}
+                              >
+                                <TableCell onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                  <Checkbox
+                                    checked={groupOrders.every((o: any) => selectedIds.has(o.id))}
+                                    onCheckedChange={() => {
+                                      const allSelected = groupOrders.every((o: any) => selectedIds.has(o.id));
+                                      setSelectedIds(prev => {
+                                        const next = new Set(prev);
+                                        groupOrders.forEach((o: any) => allSelected ? next.delete(o.id) : next.add(o.id));
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex items-center gap-2">
+                                    {isExpanded ? <ChevronDown className="h-4 w-4 text-blue-600" /> : <ChevronRight className="h-4 w-4 text-blue-600" />}
+                                    <Layers className="h-4 w-4 text-blue-600" />
+                                    <span className="font-mono font-bold text-blue-700">{planNumber}</span>
+                                    <Badge variant="outline" className="text-[10px] px-1.5 bg-blue-100 text-blue-700 border-blue-300">
+                                      {groupOrders.length}单
+                                    </Badge>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  <Badge variant="outline" className="text-[10px]">{groupOrders[0]?.businessType === "self" ? "自运" : "外请"}</Badge>
+                                </TableCell>
+                                <TableCell className="text-sm font-medium">
+                                  <div>{groupOrders[0]?.customerName || "-"}</div>
+                                  <div className="text-xs text-muted-foreground">{groupOrders[0]?.cargoName || "-"}</div>
+                                </TableCell>
+                                <TableCell className="text-sm">
+                                  {groupOrders[0]?.originCity || "-"} → {destinations.length <= 2 ? destinations.join("、") : `${destinations[0]}等${destinations.length}地`}
+                                </TableCell>
+                                <TableCell className="text-sm font-bold text-blue-700">{totalWeight.toFixed(3)}t</TableCell>
+                                <TableCell className="text-xs text-orange-600 font-medium">
+                                  {formatMoney(groupOrders.reduce((sum: number, o: any) => sum + (parseFloat(o.dispatchPrice) || 0), 0).toString())}
+                                </TableCell>
+                                <TableCell className="text-xs text-green-600 font-medium">
+                                  {(() => { const total = groupOrders.reduce((sum: number, o: any) => sum + (parseFloat(o.actualFreight) || 0), 0); return total > 0 ? formatMoney(String(total)) : "-"; })()}
+                                </TableCell>
+                                <TableCell>
+                                  {Object.entries(statusCounts).map(([st, cnt]) => (
+                                    <Badge key={st} className={`text-[9px] px-1 py-0 mr-1`} variant="secondary">
+                                      {STATUS_LABELS[st] || st}{cnt > 1 ? `×${cnt}` : ""}
+                                    </Badge>
+                                  ))}
+                                </TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">{groupOrders[0]?.department || "-"}</TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                  <div className="space-y-1">
+                                    <div className="font-medium text-foreground">主归属工作台：{getOrderWorkbenchMeta(groupOrders[0]).label}</div>
+                                    <div className="text-[11px] text-muted-foreground">责任显示：{getOrderOwnerLabel(groupOrders[0])}</div>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">-</TableCell>
+                                <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                  {groupOrders[0]?.createdAt ? new Date(groupOrders[0].createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "-"}
+                                </TableCell>
+                                <TableCell>
+                                  {hasPermission("order.assign") && (
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-purple-600 hover:text-purple-700 hover:bg-purple-50" onClick={(e) => {
+                                      e.stopPropagation();
+                                      setGroupReassignInfo({
+                                        planNumber,
+                                        orderIds: groupOrders.map((o: any) => o.id),
+                                        currentDispatcher: groupOrders[0]?.dispatcherName || undefined,
+                                      });
+                                      setGroupReassignDispatcherId("");
+                                      setGroupReassignOpen(true);
+                                    }}>
+                                      <Layers className="h-3.5 w-3.5 mr-1" />整组分配
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                              {isExpanded && groupOrders.map((order: any) => (
+                                <TableRow key={order.id} className="bg-blue-50/30 border-l-2 border-l-blue-200">
+                                  <TableCell><Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} /></TableCell>
+                                  <TableCell className="table-cell-readable font-mono text-xs align-top">
+                                    <div className="flex flex-col gap-1">
+                                      <div><span className="text-muted-foreground pl-2">└</span> {order.orderNumber || order.systemCode}</div>
+                                      {renderOutsourceSuborderPreview(order)}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className="text-[10px]">
+                                      {BIZ_LABELS[order.businessType] || order.businessType}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-sm">
+                                    <div>{order.customerName || "-"}</div>
+                                    <div className="text-xs text-muted-foreground">{order.cargoName || "-"}</div>
+                                  </TableCell>
+                                  <TableCell className="text-xs">
+                                    {order.originCity} → {order.destinationCity}
+                                  </TableCell>
+                                  <TableCell className="text-xs">{order.weight ? `${order.weight}t` : "-"}</TableCell>
+                                  <TableCell className="text-xs text-orange-600 font-medium">{order.dispatchPrice ? formatMoney(order.dispatchPrice) : "-"}</TableCell>
+                                  <TableCell className="text-xs text-green-600 font-medium">{order.actualFreight ? formatMoney(String(order.actualFreight)) : "-"}</TableCell>
+                                  <TableCell>
+                                    <div className="flex flex-col gap-1">
+                                      <Badge variant="secondary" className="w-fit text-[10px]">
+                                        {getOrderPrimaryStatusLabel(order)}
+                                      </Badge>
+                                      <span className="max-w-[220px] text-[11px] leading-4 text-muted-foreground" title={getOrderPublicViewReason(order, "overview")}>
+                                        {getOrderPublicViewReason(order, "overview")}
+                                      </span>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-xs">{order.autoAssignedRegion || "-"}</TableCell>
+                                  <TableCell className="text-xs">
+                                    <div className="space-y-1">
+                                      <div className="font-medium text-foreground">主归属工作台：{getOrderWorkbenchMeta(order).label}</div>
+                                      <div className="text-[11px] text-muted-foreground">责任显示：{getOrderOwnerLabel(order)}</div>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                    {(() => {
+                                      const fvt = order.dispatchPrice && (order as any).pricedAt && (order as any).dispatchedAt
+                                        ? Math.round((new Date((order as any).dispatchedAt).getTime() - new Date((order as any).pricedAt).getTime()) / 60000)
+                                        : null;
+                                      return fvt !== null ? (
+                                        <span className={fvt > 120 ? "text-red-500" : fvt > 60 ? "text-orange-500" : "text-green-600"}>
+                                          {fvt >= 60 ? `${Math.floor(fvt / 60)}小时${fvt % 60}分` : `${fvt}分钟`}
+                                        </span>
+                                      ) : "-";
+                                    })()}
+                                  </TableCell>
+                                  <TableCell className="table-cell-readable text-xs text-muted-foreground align-top">
+                                    {order.createdAt
+                                      ? new Date(order.createdAt).toLocaleString("zh-CN", {
+                                          month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+                                        })
+                                      : "-"}
+                                  </TableCell>
+                                  <TableCell>
+                                    {hasPermission("order.assign") && ["pending_price", "pending_vehicle", "pending_approval", "dispatched"].includes(order.status) && (
+                                      <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={() => { setReassignDialog(order); setReassignDispatcherId(""); }}>
+                                        <UserPlus className="h-3.5 w-3.5 mr-1" />分配
+                                      </Button>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </React.Fragment>
+                          );
+                        })}
+                        {overviewGrouped.ungrouped.map((order: any) => {
+                          const findVehicleTime = order.dispatchPrice && order.pricedAt && order.dispatchedAt
+                            ? Math.round((new Date(order.dispatchedAt).getTime() - new Date(order.pricedAt).getTime()) / 60000)
+                            : null;
+                          return (
+                          <TableRow key={order.id}>
+                            <TableCell><Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} /></TableCell>
+                            <TableCell className="font-mono text-xs">
+                              <div className="flex flex-col gap-1">
+                                <div>{order.orderNumber || order.systemCode}</div>
+                                {renderOutsourceSuborderPreview(order)}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="text-[10px]">
+                                {BIZ_LABELS[order.businessType] || order.businessType}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              <div>{order.customerName || "-"}</div>
+                              <div className="text-xs text-muted-foreground">{order.cargoName || "-"}</div>
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              {order.originCity} → {order.destinationCity}
+                            </TableCell>
+                            <TableCell className="text-xs">{order.weight ? `${order.weight}t` : "-"}</TableCell>
+                            <TableCell className="text-xs text-orange-600 font-medium">{order.dispatchPrice ? formatMoney(order.dispatchPrice) : "-"}</TableCell>
+                            <TableCell className="text-xs text-green-600 font-medium">{order.actualFreight ? formatMoney(String(order.actualFreight)) : "-"}</TableCell>
+                            <TableCell>
+                              <Badge variant="secondary" className="text-[10px]">
+                                {STATUS_LABELS[order.status] || order.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs">{order.autoAssignedRegion || "-"}</TableCell>
+                            <TableCell className="text-xs">{(order as any).dispatcherName || "-"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {findVehicleTime !== null ? (
+                                <span className={findVehicleTime > 120 ? "text-red-500" : findVehicleTime > 60 ? "text-orange-500" : "text-green-600"}>
+                                  {findVehicleTime >= 60 ? `${Math.floor(findVehicleTime / 60)}小时${findVehicleTime % 60}分` : `${findVehicleTime}分钟`}
+                                </span>
+                              ) : "-"}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {order.createdAt
+                                ? new Date(order.createdAt).toLocaleString("zh-CN", {
+                                    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+                                  })
+                                : "-"}
+                            </TableCell>
+                            <TableCell>
+                              {hasPermission("order.assign") && ["pending_price", "pending_vehicle", "pending_approval", "dispatched"].includes(order.status) && (
+                                <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={() => { setReassignDialog(order); setReassignDispatcherId(""); }}>
+                                  <UserPlus className="h-3.5 w-3.5 mr-1" />分配
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                          );
+                        })}
+                      </>
+                    ) : (
+                      sortedAllOrders.map((order) => {
+                        const findVehicleTime2 = order.dispatchPrice && (order as any).pricedAt && (order as any).dispatchedAt
+                          ? Math.round((new Date((order as any).dispatchedAt).getTime() - new Date((order as any).pricedAt).getTime()) / 60000)
+                          : null;
+                        return (
+                        <TableRow key={order.id}>
+                          <TableCell><Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} /></TableCell>
+                          <TableCell className="font-mono text-xs">{order.orderNumber || order.systemCode}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-[10px]">
+                              {BIZ_LABELS[order.businessType] || order.businessType}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            <div>{order.customerName || "-"}</div>
+                            <div className="text-xs text-muted-foreground">{(order as any).cargoName || "-"}</div>
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {order.originCity} → {order.destinationCity}
+                          </TableCell>
+                          <TableCell className="text-xs">{(order as any).weight ? `${(order as any).weight}t` : "-"}</TableCell>
+                          <TableCell className="text-xs text-orange-600 font-medium">{order.dispatchPrice ? formatMoney(order.dispatchPrice) : "-"}</TableCell>
+                          <TableCell className="text-xs text-green-600 font-medium">{(order as any).actualFreight ? formatMoney(String((order as any).actualFreight)) : "-"}</TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className="text-[10px]">
+                              {STATUS_LABELS[order.status] || order.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs">{order.autoAssignedRegion || "-"}</TableCell>
+                          <TableCell className="text-xs">{(order as any).dispatcherName || "-"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {findVehicleTime2 !== null ? (
+                              <span className={findVehicleTime2 > 120 ? "text-red-500" : findVehicleTime2 > 60 ? "text-orange-500" : "text-green-600"}>
+                                {findVehicleTime2 >= 60 ? `${Math.floor(findVehicleTime2 / 60)}小时${findVehicleTime2 % 60}分` : `${findVehicleTime2}分钟`}
+                              </span>
+                            ) : "-"}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {order.createdAt
+                              ? new Date(order.createdAt).toLocaleString("zh-CN", {
+                                  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+                                })
+                              : "-"}
+                          </TableCell>
+                          <TableCell>
+                            {hasPermission("order.assign") && ["pending_price", "pending_vehicle", "pending_approval", "dispatched"].includes(order.status) && (
+                              <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50" onClick={() => { setReassignDialog(order); setReassignDispatcherId(""); }}>
+                                <UserPlus className="h-3.5 w-3.5 mr-1" />分配
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+                <TablePagination total={sortedAllOrders.length} page={overviewPage} pageSize={overviewPageSize} onPageChange={setOverviewPage} onPageSizeChange={setOverviewPageSize} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* 发货时效监控 */}
+          <TabsContent value="timeliness">
+            {timelinessData ? (
+              <>
+                {/* 达标率概览 */}
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Timer className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">甲方要求：接单后24h内发货，最迟48h</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-muted-foreground">24h达标率</span>
+                      <Badge variant={timelinessData.onTimeRate24h >= 80 ? "default" : "destructive"} className="text-[10px] px-1.5">
+                        {timelinessData.onTimeRate24h}%
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-muted-foreground">48h达标率</span>
+                      <Badge variant={timelinessData.onTimeRate48h >= 95 ? "default" : "destructive"} className="text-[10px] px-1.5">
+                        {timelinessData.onTimeRate48h}%
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 三色卡片 */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div
+                    className={`rounded-xl p-4 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-md ${timelinessFilter === "normal" ? "ring-2 ring-green-500" : ""}`}
+                    style={{ background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)" }}
+                    onClick={() => setTimelinessFilter(timelinessFilter === "normal" ? "all" : "normal")}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1 rounded-lg bg-green-200/80">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-700" />
+                      </div>
+                      <span className="text-[11px] font-medium text-green-800">正常 (≤24h)</span>
+                    </div>
+                    <div className="text-2xl font-bold text-green-700">{timelinessData.unshipped.within24h}</div>
+                    <div className="text-[10px] text-green-600/80">未发货订单</div>
+                  </div>
+                  <div
+                    className={`rounded-xl p-4 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-md ${timelinessFilter === "warning" ? "ring-2 ring-amber-500" : ""}`}
+                    style={{ background: "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)" }}
+                    onClick={() => setTimelinessFilter(timelinessFilter === "warning" ? "all" : "warning")}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1 rounded-lg bg-amber-200/80">
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-700" />
+                      </div>
+                      <span className="text-[11px] font-medium text-amber-800">预警 (24-48h)</span>
+                    </div>
+                    <div className="text-2xl font-bold text-amber-700">{timelinessData.unshipped.between24and48h}</div>
+                    <div className="text-[10px] text-amber-600/80">即将超时</div>
+                  </div>
+                  <div
+                    className={`relative rounded-xl p-4 cursor-pointer transition-all hover:scale-[1.02] hover:shadow-md ${timelinessFilter === "overdue" ? "ring-2 ring-red-500" : ""}`}
+                    style={{ background: "linear-gradient(135deg, #fef2f2 0%, #fecaca 100%)" }}
+                    onClick={() => setTimelinessFilter(timelinessFilter === "overdue" ? "all" : "overdue")}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1 rounded-lg bg-red-200/80">
+                        <Siren className="h-3.5 w-3.5 text-red-700" />
+                      </div>
+                      <span className="text-[11px] font-medium text-red-800">超时 ({">"}48h)</span>
+                    </div>
+                    <div className="text-2xl font-bold text-red-700">{timelinessData.unshipped.over48h}</div>
+                    <div className="text-[10px] text-red-600/80">违反甲方时效要求</div>
+                    {timelinessData.unshipped.over48h > 0 && (
+                      <div className="absolute top-2 right-2">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 最近30天已发货时效分布 */}
+                <div className="mb-4">
+                  <div className="text-xs text-muted-foreground mb-2">最近30天已发货时效分布</div>
+                  {timelinessData.shipped.total > 0 ? (
+                    <div>
+                      <div className="flex h-5 rounded-full overflow-hidden">
+                        {timelinessData.shipped.within24h > 0 && (
+                          <div className="bg-green-500 flex items-center justify-center text-white text-[10px] font-medium" style={{ width: `${(timelinessData.shipped.within24h / timelinessData.shipped.total) * 100}%` }}>
+                            {Math.round((timelinessData.shipped.within24h / timelinessData.shipped.total) * 100)}%
+                          </div>
+                        )}
+                        {timelinessData.shipped.between24and48h > 0 && (
+                          <div className="bg-amber-500 flex items-center justify-center text-white text-[10px] font-medium" style={{ width: `${(timelinessData.shipped.between24and48h / timelinessData.shipped.total) * 100}%` }}>
+                            {Math.round((timelinessData.shipped.between24and48h / timelinessData.shipped.total) * 100)}%
+                          </div>
+                        )}
+                        {timelinessData.shipped.over48h > 0 && (
+                          <div className="bg-red-500 flex items-center justify-center text-white text-[10px] font-medium" style={{ width: `${(timelinessData.shipped.over48h / timelinessData.shipped.total) * 100}%` }}>
+                            {Math.round((timelinessData.shipped.over48h / timelinessData.shipped.total) * 100)}%
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-4 text-[10px] text-muted-foreground">
+                        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500"></span>≤24h: {timelinessData.shipped.within24h}单</span>
+                        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500"></span>24-48h: {timelinessData.shipped.between24and48h}单</span>
+                        <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500"></span>{">"}48h: {timelinessData.shipped.over48h}单</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">暂无已发货订单数据</div>
+                  )}
+                </div>
+
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  {timelinessFilter !== "all" && (
+                    <>
+                      <Badge variant="outline" className={`text-xs ${timelinessFilter === "normal" ? "border-green-400 text-green-700 bg-green-50" : timelinessFilter === "warning" ? "border-amber-400 text-amber-700 bg-amber-50" : "border-red-400 text-red-700 bg-red-50"}`}>
+                        当前筛选：{timelinessFilter === "normal" ? "正常(≤24h)" : timelinessFilter === "warning" ? "预警(24-48h)" : "超时(>48h)"}
+                      </Badge>
+                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setTimelinessFilter("all")}>清除筛选</Button>
+                    </>
+                  )}
+                  <Button
+                    variant={timelinessGroupByPlan ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setTimelinessGroupByPlan(!timelinessGroupByPlan)}
+                  >
+                    {timelinessGroupByPlan ? <Layers className="h-3 w-3 mr-1" /> : <List className="h-3 w-3 mr-1" />}
+                    {timelinessGroupByPlan ? "分组" : "列表"}
+                  </Button>
+                  <span className="ml-auto text-xs text-muted-foreground">共 {filteredTimelinessOrders.length} 条</span>
+                </div>
+
+                {/* 订单明细表格 */}
+                <Card>
+                  <CardContent className="p-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>订单号</TableHead>
+                          <TableHead>客户</TableHead>
+                          <TableHead>路线</TableHead>
+                          <TableHead>时效状态</TableHead>
+                          <TableHead>已等待</TableHead>
+                          <TableHead>剩余时间</TableHead>
+                          <TableHead>订单状态</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {timelinessVisibleOrders.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                              <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-400" />
+                              {timelinessFilter === "all" ? "所有未发货订单均在正常时效内" : "该时效等级暂无订单"}
+                            </TableCell>
+                          </TableRow>
+                        ) : timelinessGroupByPlan && timelinessGrouped ? (
+                          <>
+                            {Array.from(timelinessGrouped.groups.entries()).map(([planNumber, groupOrders]) => {
+                              const isExpanded = timelinessExpanded.has(planNumber);
+                              const destinations = Array.from(new Set(groupOrders.map((order: any) => order.destinationCity).filter(Boolean)));
+                              const normalCount = groupOrders.filter((order: any) => order.waitHours <= 24).length;
+                              const warningCount = groupOrders.filter((order: any) => order.waitHours > 24 && order.waitHours <= 48).length;
+                              const overdueCount = groupOrders.filter((order: any) => order.waitHours > 48).length;
+                              const maxWaitHours = Math.max(...groupOrders.map((order: any) => Number(order.waitHours || 0)));
+                              const minRemainHours = Math.min(...groupOrders.map((order: any) => Number(order.remainHours || 0)));
+                              const statusCounts: Record<string, number> = {};
+                              groupOrders.forEach((order: any) => {
+                                statusCounts[order.status] = (statusCounts[order.status] || 0) + 1;
+                              });
+                              return (
+                                <React.Fragment key={planNumber}>
+                                  <TableRow className="cursor-pointer border-l-2 border-l-blue-500 bg-blue-50 hover:bg-blue-100/80" onClick={() => toggleTimelinessGroup(planNumber)}>
+                                    <TableCell>
+                                      <div className="flex items-center gap-2">
+                                        {isExpanded ? <ChevronDown className="h-4 w-4 text-blue-600" /> : <ChevronRight className="h-4 w-4 text-blue-600" />}
+                                        <Layers className="h-4 w-4 text-blue-600" />
+                                        <span className="font-mono font-bold text-blue-700">{planNumber}</span>
+                                        <Badge variant="outline" className="bg-blue-100 text-[10px] text-blue-700 border-blue-300">{groupOrders.length}单</Badge>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell className="text-sm font-medium">{groupOrders[0]?.customerName || "-"}</TableCell>
+                                    <TableCell className="text-xs">{groupOrders[0]?.originCity || "?"} <ArrowRight className="inline h-3 w-3" /> {destinations.length <= 2 ? (destinations.join("、") || "?") : `${destinations[0]}等${destinations.length}地`}</TableCell>
+                                    <TableCell>
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        {normalCount > 0 && <Badge variant="outline" className="border-green-200 bg-green-100 text-[10px] text-green-700">正常×{normalCount}</Badge>}
+                                        {warningCount > 0 && <Badge variant="outline" className="border-amber-200 bg-amber-100 text-[10px] text-amber-700">预警×{warningCount}</Badge>}
+                                        {overdueCount > 0 && <Badge variant="outline" className="border-red-200 bg-red-100 text-[10px] text-red-700">超时×{overdueCount}</Badge>}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell className="text-xs font-medium">最长 {maxWaitHours}h</TableCell>
+                                    <TableCell className={`text-xs font-medium ${minRemainHours < 0 ? "text-red-600" : minRemainHours < 12 ? "text-amber-600" : "text-green-600"}`}>{minRemainHours < 0 ? `已超${Math.abs(minRemainHours)}h` : `${minRemainHours}h`}</TableCell>
+                                    <TableCell>
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        {Object.entries(statusCounts).map(([status, count]) => (
+                                          <Badge key={status} variant="secondary" className="text-[10px]">{STATUS_LABELS[status] || status}{count > 1 ? `×${count}` : ""}</Badge>
+                                        ))}
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                  {isExpanded && groupOrders.map((order: any) => (
+                                    <TableRow key={order.id} className="border-l-2 border-l-blue-200 bg-blue-50/30">
+                                      <TableCell className="font-mono text-xs pl-8"><span className="text-muted-foreground">└</span> {order.orderNumber || order.systemCode}</TableCell>
+                                      <TableCell className="text-sm">{order.customerName || "-"}</TableCell>
+                                      <TableCell>
+                                        <div className="flex items-center gap-1 text-xs">
+                                          {order.originCity || "?"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "?"}
+                                        </div>
+                                      </TableCell>
+                                      <TableCell>
+                                        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${order.waitHours <= 24 ? "bg-green-100 text-green-700 border-green-200" : order.waitHours <= 48 ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-red-100 text-red-700 border-red-200"}`}>
+                                          {order.waitHours <= 24 ? "正常" : order.waitHours <= 48 ? "预警" : "超时"}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="text-xs font-medium">{order.waitHours}h</TableCell>
+                                      <TableCell className={`text-xs font-medium ${order.remainHours < 0 ? "text-red-600" : order.remainHours < 12 ? "text-amber-600" : "text-green-600"}`}>{order.remainHours < 0 ? `已超${Math.abs(order.remainHours)}h` : `${order.remainHours}h`}</TableCell>
+                                      <TableCell>
+                                        <Badge variant="secondary" className="text-[10px]">{STATUS_LABELS[order.status] || order.status}</Badge>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </React.Fragment>
+                              );
+                            })}
+                            {timelinessGrouped.ungrouped.map((order: any) => (
+                              <TableRow key={order.id}>
+                                <TableCell className="table-cell-readable font-mono text-xs align-top">{order.orderNumber || order.systemCode}</TableCell>
+                                <TableCell className="text-sm">{order.customerName || "-"}</TableCell>
+                                <TableCell>
+                                  <div className="flex items-center gap-1 text-xs">
+                                    {order.originCity || "?"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "?"}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${order.waitHours <= 24 ? "bg-green-100 text-green-700 border-green-200" : order.waitHours <= 48 ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-red-100 text-red-700 border-red-200"}`}>
+                                    {order.waitHours <= 24 ? "正常" : order.waitHours <= 48 ? "预警" : "超时"}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-xs font-medium">{order.waitHours}h</TableCell>
+                                <TableCell className={`text-xs font-medium ${order.remainHours < 0 ? "text-red-600" : order.remainHours < 12 ? "text-amber-600" : "text-green-600"}`}>{order.remainHours < 0 ? `已超${Math.abs(order.remainHours)}h` : `${order.remainHours}h`}</TableCell>
+                                <TableCell>
+                                  <Badge variant="secondary" className="text-[10px]">{STATUS_LABELS[order.status] || order.status}</Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </>
+                        ) : (
+                          timelinessVisibleOrders.map((order: any) => (
+                            <TableRow key={order.id}>
+                              <TableCell className="font-mono text-xs">{order.orderNumber || order.systemCode}</TableCell>
+                              <TableCell className="text-sm">{order.customerName || "-"}</TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-1 text-xs">
+                                  {order.originCity || "?"} <ArrowRight className="h-3 w-3" /> {order.destinationCity || "?"}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${order.waitHours <= 24 ? "bg-green-100 text-green-700 border-green-200" : order.waitHours <= 48 ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-red-100 text-red-700 border-red-200"}`}>
+                                  {order.waitHours <= 24 ? "正常" : order.waitHours <= 48 ? "预警" : "超时"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-xs font-medium">{order.waitHours}h</TableCell>
+                              <TableCell className={`text-xs font-medium ${order.remainHours < 0 ? "text-red-600" : order.remainHours < 12 ? "text-amber-600" : "text-green-600"}`}>{order.remainHours < 0 ? `已超${Math.abs(order.remainHours)}h` : `${order.remainHours}h`}</TableCell>
+                              <TableCell>
+                                <Badge variant="secondary" className="text-[10px]">{STATUS_LABELS[order.status] || order.status}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                    {!timelinessGroupByPlan && (
+                      <TablePagination total={filteredTimelinessOrders.length} page={timelinessPage} pageSize={timelinessPageSize} onPageChange={setTimelinessPage} onPageSizeChange={setTimelinessPageSize} />
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            ) : (
+              <div className="text-center py-8 text-sm text-muted-foreground">加载中...</div>
+            )}
+          </TabsContent>
+        </Tabs>
+
+        {/* 定价弹窗 */}
+        <Dialog open={!!pricingDialog} onOpenChange={(open) => !open && setPricingDialog(null)}>
+          <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-orange-500" />
+                外请定价
+                {pricingDialog?.isUrgent && <Badge variant="destructive">加急</Badge>}
+              </DialogTitle>
+            </DialogHeader>
+            {pricingDialog && (
+              <div className="space-y-3">
+                {/* 整组定价时：只显示合并订单汇总信息，不显示子订单详情 */}
+                {groupPricingMode && groupPricingOrders.length > 1 ? (
+                  <>
+                  <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Layers className="h-5 w-5 text-blue-600" />
+                      <span className="text-base font-bold text-blue-800">合并订单整组定价</span>
+                      {groupPricingOrders[0]?.isUrgent && <Badge variant="destructive">加急</Badge>}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div><span className="text-muted-foreground">合并计划号：</span><span className="font-mono font-bold text-blue-700">{groupPricingOrders[0]?.mergedPlanNumber}</span></div>
+                      <div><span className="text-muted-foreground">子订单数：</span><span className="font-semibold">{groupPricingOrders.length} 单</span></div>
+                      <div><span className="text-muted-foreground">客户：</span><span>{groupPricingOrders[0]?.customerName || "-"}</span></div>
+                      <div><span className="text-muted-foreground">货物：</span><span>{groupPricingOrders[0]?.cargoName || "-"}</span></div>
+                      <div><span className="text-muted-foreground">总重量：</span><span className="font-semibold">{groupPricingOrders.reduce((s: number, o: any) => s + parseFloat(o.weight || "0"), 0).toFixed(3)}吨</span></div>
+                      <div><span className="text-muted-foreground">业务类型：</span><Badge variant="outline">{BIZ_LABELS[groupPricingOrders[0]?.businessType] || groupPricingOrders[0]?.businessType}</Badge></div>
+                      <div><span className="text-muted-foreground">路线：</span><span>{groupPricingOrders[0]?.originCity} → {groupPricingOrders[0]?.destinationCity}</span></div>
+                      {groupPricingOrders[0]?.customerPrice && (
+                        <div><span className="text-muted-foreground">客户报价总计：</span><span className="text-green-600 font-bold">￥{groupPricingOrders.reduce((s: number, o: any) => s + parseFloat(o.customerPrice || "0"), 0).toFixed(0)}</span></div>
+                      )}
+                    </div>
+                    {groupPricingOrders[0]?.deliveryAddress && (
+                      <div className="text-sm text-wrap-safe"><span className="text-muted-foreground">卸货地址：</span>{groupPricingOrders[0]?.deliveryAddress}</div>
+                    )}
+                    {groupPricingOrders[0]?.receiverName && (
+                      <div className="text-sm text-wrap-safe"><span className="text-muted-foreground">收货人：</span>{groupPricingOrders[0]?.receiverName} {groupPricingOrders[0]?.receiverPhone ? `(${groupPricingOrders[0]?.receiverPhone})` : ""}</div>
+                    )}
+                  </div>
+                  {groupPricingOrders[0]?.isUrgent && groupPricingOrders[0]?.urgentReason && (
+                    <div className="note-panel-readable border border-red-200 bg-red-50">
+                      <div className="field-label-muted text-red-700">加急原因</div>
+                      <div className="field-value-readable text-red-800 text-wrap-keep-linebreaks">{groupPricingOrders[0]?.urgentReason}</div>
+                    </div>
+                  )}
+                  {((groupPricingOrders[0] as any)?.shippingNote || groupPricingOrders[0]?.remarks) && (
+                    <div className="note-panel-readable border border-blue-200 bg-blue-50">
+                      <div className="field-label-muted text-blue-800">发货备注</div>
+                      <div className="field-value-readable text-blue-900 text-wrap-keep-linebreaks">{(groupPricingOrders[0] as any)?.shippingNote || groupPricingOrders[0]?.remarks}</div>
+                    </div>
+                  )}
+                  </>
+                ) : (
+                  <>
+                {/* 单独定价：显示子订单详情 */}
+                <div className="bg-muted/50 rounded-lg p-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono font-medium">{pricingDialog.orderNumber || pricingDialog.systemCode}</span>
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="outline">{BIZ_LABELS[pricingDialog.businessType] || pricingDialog.businessType}</Badge>
+                      {pricingDialog.isLargeSlab && <Badge className="bg-purple-100 text-purple-700 border-purple-300">大板</Badge>}
+                    </div>
+                  </div>
+                  {pricingDialog.mergedPlanNumber && (
+                    <div className="text-blue-600 text-xs">合并计划号：{pricingDialog.mergedPlanNumber}</div>
+                  )}
+                  <div className="text-muted-foreground">
+                    {pricingDialog.customerName}{pricingDialog.customerPhone ? ` (${pricingDialog.customerPhone})` : ""} · {pricingDialog.cargoName} · {pricingDialog.weight ? `${pricingDialog.weight}吨` : ""}
+                    {pricingDialog.packagingType === "pallet" ? " · 托盘" : pricingDialog.packagingType === "loose" ? " · 散装" : pricingDialog.packagingType === "pallet_loaded" ? " · 托盘装车" : ""}
+                  </div>
+                  {pricingDialog.cargoSpec && (
+                    <div className="text-xs text-muted-foreground">规格：{pricingDialog.cargoSpec}</div>
+                  )}
+                  {pricingDialog.specialRequirements && (
+                    <div className="text-xs text-orange-600">特殊要求：{pricingDialog.specialRequirements}</div>
+                  )}
+                  {pricingDialog.orderDate && (
+                    <div className="text-xs text-muted-foreground">下单时间：{fmtDate(pricingDialog.orderDate)}</div>
+                  )}
+                  {pricingDialog.settlementType && (
+                    <div className="text-xs text-muted-foreground">结算方式：{pricingDialog.settlementType === 'monthly' ? '月结' : pricingDialog.settlementType === 'cash' ? '现付' : '到付'}</div>
+                  )}
+                </div>
+
+                {/* 大板信息 */}
+                {pricingDialog.isLargeSlab && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5 text-sm space-y-1">
+                    <div className="flex items-center gap-1.5 text-purple-700 font-medium text-xs">🪨 大板信息</div>
+                    <div className="flex gap-4 text-xs">
+                      {pricingDialog.chargeableWeight && <span>计费重量：<span className="font-medium">{pricingDialog.chargeableWeight}吨</span></span>}
+                      {pricingDialog.packageCount && <span>架数：<span className="font-medium">{pricingDialog.packageCount}架</span></span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* 发货/卸货地址 */}
+                <div className="bg-muted/30 rounded-lg p-3 space-y-1.5 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">发货地：</span>
+                    <span>{pricingDialog.originCity}{pricingDialog.warehouseName ? ` · ${pricingDialog.warehouseName}` : ""}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">卸货地：</span>
+                    <span>{pricingDialog.destinationCity}</span>
+                    {pricingDialog.deliveryAddress && <div className="text-xs text-muted-foreground ml-12 text-wrap-safe">{pricingDialog.deliveryAddress}</div>}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">收货人：</span>
+                    <span>{pricingDialog.receiverName || "-"} {pricingDialog.receiverPhone ? `(${pricingDialog.receiverPhone})` : ""}</span>
+                  </div>
+                </div>
+
+                {((pricingDialog as any).shippingNote || pricingDialog?.remarks) && (
+                  <div className="note-panel-readable border border-blue-200 bg-blue-50">
+                    <div className="field-label-muted text-blue-800">发货备注</div>
+                    <div className="field-value-readable text-blue-900 text-wrap-keep-linebreaks">{(pricingDialog as any).shippingNote || pricingDialog?.remarks}</div>
+                  </div>
+                )}
+                {(pricingDialog as any).receivingNote && (
+                  <div className="note-panel-readable border border-orange-300 bg-orange-100">
+                    <div className="field-label-muted text-orange-800">收货备注</div>
+                    <div className="field-value-readable text-orange-900 text-wrap-keep-linebreaks">{(pricingDialog as any).receivingNote}</div>
+                  </div>
+                )}
+
+                {/* 客户报价 */}
+                {pricingDialog.customerPrice && (
+                  <div className="flex items-center gap-4 text-sm">
+                    <span>客户报价：<span className="font-bold text-green-600">{formatMoney(pricingDialog.customerPrice)}</span></span>
+                    {pricingDialog.isLargeSlab && pricingDialog.chargeableWeight && pricingDialog.customerPrice && (
+                      <span className="text-xs text-muted-foreground">折合 ¥{(parseFloat(pricingDialog.customerPrice) / parseFloat(pricingDialog.chargeableWeight)).toFixed(2)}/吨</span>
+                    )}
+                  </div>
+                )}
+
+                {/* 订单备注 */}
+                {pricingDialog.remarks && (
+                  <div className="note-panel-readable border border-amber-200 bg-amber-50">
+                    <div className="field-label-muted text-amber-700">订单备注</div>
+                    <div className="field-value-readable text-amber-800 text-wrap-keep-linebreaks">{pricingDialog.remarks}</div>
+                  </div>
+                )}
+
+                {/* 加急原因 */}
+                {pricingDialog.isUrgent && pricingDialog.urgentReason && (
+                  <div className="note-panel-readable border border-red-200 bg-red-50">
+                    <div className="field-label-muted text-red-700">加急原因</div>
+                    <div className="field-value-readable text-red-800 text-wrap-keep-linebreaks">{pricingDialog.urgentReason}</div>
+                  </div>
+                )}
+                  </>
+                )}
+
+                {/* 定价输入 */}
+                <div className="border-t pt-3">
+                  <label className="text-sm font-medium">
+                    {groupPricingMode ? "调度总价（元）- 将按吨位自动分摊到各子单" : "调度价（元）"}
+                  </label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    placeholder={groupPricingMode ? "输入合并订单总价" : "输入正数金额"}
+                    value={priceValue}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "" || parseFloat(v) >= 0) setPriceValue(v);
+                    }}
+                    className="mt-1"
+                  />
+                  {priceValue && parseFloat(priceValue) <= 0 && (
+                    <p className="text-xs text-destructive mt-1">调度价必须为正数</p>
+                  )}
+                  {/* 整组定价时显示分摊预览 */}
+                  {groupPricingMode && groupPriceSplits.length > 0 && (
+                    <div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-2.5">
+                      <div className="text-xs font-medium text-orange-700 mb-1.5">按吨位分摊预览：</div>
+                      <div className="space-y-1">
+                        {groupPriceSplits.map((s: any) => (
+                          <div key={s.orderId} className="flex items-center justify-between text-xs">
+                            <span className="font-mono text-muted-foreground">{s.orderNumber}</span>
+                            <span className="text-muted-foreground">{s.weight.toFixed(3)}t</span>
+                            <span className="font-medium text-orange-700">¥{s.price.toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-1.5 pt-1.5 border-t border-orange-200 flex justify-between text-xs font-medium">
+                        <span className="text-orange-700">合计</span>
+                        <span className="text-orange-700">¥{groupPriceSplits.reduce((s: number, x: any) => s + x.price, 0).toFixed(2)}</span>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {groupPricingMode
+                      ? `输入总价后系统将按各子单吨位比例自动分摊，并匹配区域调度员`
+                      : "定价后系统将自动根据目的地匹配区域调度员"
+                    }
+                  </p>
+                </div>
+                {/* 调度员备注 */}
+                <div>
+                  <label className="text-sm font-medium">备注（选填）</label>
+                  <Textarea
+                    placeholder="如有特殊要求请备注，如卸货马上付款、卸货3日内付款、需要尾板等"
+                    value={pricingRemark}
+                    onChange={(e) => setPricingRemark(e.target.value)}
+                    className="mt-1"
+                    rows={2}
+                  />
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setPricingDialog(null); setGroupPricingMode(false); setGroupPricingOrders([]); setPricingRemark(''); }}>取消</Button>
+              {groupPricingMode ? (
+                <Button
+                  className="bg-blue-600 hover:bg-blue-700"
+                  onClick={confirmGroupPrice}
+                  disabled={!priceValue || priceAndAssign.isPending || groupPricingProgress > 0}
+                >
+                  <Layers className="h-4 w-4 mr-1" />
+                  {groupPricingProgress > 0 ? `定价中 (${groupPricingProgress}/${groupPricingOrders.length})` : `确认整组定价 (${groupPricingOrders.length}单)`}
+                </Button>
+              ) : (
+                <Button onClick={confirmPrice} disabled={!priceValue || priceAndAssign.isPending}>
+                  {priceAndAssign.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                  {priceAndAssign.isPending ? "定价中..." : "确认定价"}
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 手动分配弹窗 */}
+        <Dialog open={!!assignDialog} onOpenChange={(open) => !open && setAssignDialog(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <UserPlus className="h-5 w-5 text-blue-500" />
+                手动分配调度员
+                {assignDialog?.isUrgent && <Badge variant="destructive">加急</Badge>}
+              </DialogTitle>
+            </DialogHeader>
+            {assignDialog && (
+              <div className="space-y-3">
+                {/* 订单基本信息 */}
+                <div className="bg-muted/50 rounded-lg p-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono font-medium">{assignDialog.orderNumber || assignDialog.systemCode}</span>
+                    <Badge variant="outline">{BIZ_LABELS[assignDialog.businessType] || assignDialog.businessType}</Badge>
+                  </div>
+                  {assignDialog.mergedPlanNumber && (
+                    <div className="text-blue-600 text-xs">合并计划号：{assignDialog.mergedPlanNumber}</div>
+                  )}
+                  <div className="text-muted-foreground">
+                    {assignDialog.customerName} · {assignDialog.cargoName} · {assignDialog.weight ? `${assignDialog.weight}吨` : ""}
+                  </div>
+                </div>
+
+                {/* 发货/卸货地址 */}
+                <div className="bg-muted/30 rounded-lg p-3 space-y-1.5 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">发货地：</span>
+                    <span>{assignDialog.originCity}{assignDialog.warehouseName ? ` · ${assignDialog.warehouseName}` : ""}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">卸货地：</span>
+                    <span>{assignDialog.destinationCity}</span>
+                    {assignDialog.deliveryAddress && <div className="text-xs text-muted-foreground ml-12">{assignDialog.deliveryAddress}</div>}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">收货人：</span>
+                    <span>{assignDialog.receiverName || "-"} {assignDialog.receiverPhone ? `(${assignDialog.receiverPhone})` : ""}</span>
+                  </div>
+                </div>
+
+                {((assignDialog as any).shippingNote || assignDialog?.remarks) && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <span className="text-sm font-semibold text-blue-800">📦 发货备注：</span>
+                    <span className="text-sm text-blue-900">{(assignDialog as any).shippingNote || assignDialog?.remarks}</span>
+                  </div>
+                )}
+                {(assignDialog as any).receivingNote && (
+                  <div className="bg-orange-100 border border-orange-300 rounded-lg p-3">
+                    <span className="text-sm font-semibold text-orange-800">📌 收货备注：</span>
+                    <span className="text-sm text-orange-900">{(assignDialog as any).receivingNote}</span>
+                  </div>
+                )}
+
+                {/* 客户报价 + 调度价 */}
+                <div className="flex items-center gap-4 text-sm">
+                  {assignDialog.customerPrice && (
+                    <span>客户报价：<span className="font-bold text-green-600">{formatMoney(assignDialog.customerPrice)}</span></span>
+                  )}
+                  {assignDialog.dispatchPrice && (
+                    <span>调度价：<span className="font-bold text-orange-600">{formatMoney(assignDialog.dispatchPrice)}</span></span>
+                  )}
+                </div>
+
+                {/* 订单备注 */}
+                {assignDialog.remarks && (
+                  <div className="bg-amber-50 border border-amber-200 rounded p-2">
+                    <span className="text-xs font-medium text-amber-700">订单备注：</span>
+                    <span className="text-sm text-amber-800 ml-1">{assignDialog.remarks}</span>
+                  </div>
+                )}
+
+                {/* 加急原因 */}
+                {assignDialog.isUrgent && assignDialog.urgentReason && (
+                  <div className="bg-red-50 border border-red-200 rounded p-2">
+                    <span className="text-xs font-medium text-red-700">加急原因：</span>
+                    <span className="text-sm text-red-800 ml-1">{assignDialog.urgentReason}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="text-sm font-medium">选择外请调度员</label>
+                  <Select value={selectedDispatcherId} onValueChange={setSelectedDispatcherId}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="选择调度员" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {outsourceDispatchers.map((d: any) => (
+                        <SelectItem key={d.id} value={String(d.id)}>
+                          {d.name || d.username} {d.region ? `(${d.region})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    区域自动匹配失败，请手动选择负责该区域的调度员
+                  </p>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAssignDialog(null)}>取消</Button>
+              <Button onClick={confirmManualAssign} disabled={!selectedDispatcherId || manualAssign.isPending}>
+                {manualAssign.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                {manualAssign.isPending ? "分配中..." : "确认分配"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* 删除确认弹窗 */}
+      <AlertDialog open={deleteTargetId !== null} onOpenChange={(open) => !open && setDeleteTargetId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除</AlertDialogTitle>
+            <AlertDialogDescription>确定要删除这个订单吗？删除后不可恢复。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteTargetId && deleteMutation.mutate({ id: deleteTargetId })}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "删除中..." : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {/* 批量删除确认弹窗 */}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={(open) => !open && setBatchDeleteOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认批量删除</AlertDialogTitle>
+            <AlertDialogDescription>
+              已选择 {selectedIds.size} 个订单，删除后不可恢复，请再次确认。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setBatchDeleteOpen(false)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => batchDeleteMutation.mutate({ ids: Array.from(selectedIds) })}
+              disabled={batchDeleteMutation.isPending}
+            >
+              {batchDeleteMutation.isPending ? "删除中..." : `确认删除 ${selectedIds.size} 个`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 加急确认弹窗 */}
+      <Dialog open={!!urgentDialogInfo} onOpenChange={(open) => { if (!open) { setUrgentDialogInfo(null); setUrgentReason(""); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Flame className="h-5 w-5 text-amber-500" />
+              {urgentDialogInfo?.action === "clear" ? "取消加急" : "标记加急"}
+            </DialogTitle>
+          </DialogHeader>
+          {urgentDialogInfo && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                {urgentDialogInfo.scopeLabel}已选中 <span className="font-medium text-foreground">{urgentDialogInfo.orderIds.length}</span> 个订单。
+                {urgentDialogInfo.action === "mark" ? " 请填写加急原因，提交后将同步更新所选订单。" : " 确认后将移除所选订单的加急标记。"}
+              </p>
+              <div className="rounded-lg border bg-muted/40 p-3">
+                <div className="mb-2 text-xs font-medium text-foreground">涉及订单</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {urgentDialogInfo.orders.slice(0, 6).map((order: any) => (
+                    <Badge key={order.id} variant="outline" className="text-[10px]">
+                      {order.orderNumber || order.systemCode || `#${order.id}`}
+                    </Badge>
+                  ))}
+                  {urgentDialogInfo.orders.length > 6 && (
+                    <span className="text-[10px] text-muted-foreground">等 {urgentDialogInfo.orders.length} 单</span>
+                  )}
+                </div>
+              </div>
+              {urgentDialogInfo.action === "mark" && (
+                <div>
+                  <Label>加急原因 *</Label>
+                  <Textarea
+                    value={urgentReason}
+                    onChange={(e) => setUrgentReason(e.target.value)}
+                    placeholder="请输入加急原因，如客户催货、现场排队、时效临近等"
+                    rows={3}
+                  />
+                </div>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setUrgentDialogInfo(null); setUrgentReason(""); }}>取消</Button>
+                <Button
+                  className={urgentDialogInfo.action === "clear" ? "bg-slate-700 hover:bg-slate-800 text-white" : "bg-amber-500 hover:bg-amber-600 text-white"}
+                  onClick={confirmUrgentToggle}
+                  disabled={(urgentDialogInfo.action === "mark" && !urgentReason.trim()) || updateOrderFields.isPending}
+                >
+                  {updateOrderFields.isPending
+                    ? (urgentDialogInfo.action === "clear" ? "取消中..." : "提交中...")
+                    : (urgentDialogInfo.action === "clear" ? `确认取消 ${urgentDialogInfo.orderIds.length} 个` : `确认加急 ${urgentDialogInfo.orderIds.length} 个`)}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量退回确认弹窗 */}
+      <Dialog open={batchRollbackOpen} onOpenChange={(open) => { if (!open) { setBatchRollbackOpen(false); setBatchRollbackReason(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Undo2 className="h-5 w-5 text-orange-500" />
+              批量退回上一步
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              已选择 <span className="font-medium text-foreground">{selectedIds.size}</span> 个订单，将全部退回到上一个流程节点。不支持退回的订单将自动跳过。
+            </p>
+            <div>
+              <Label>退回原因 *</Label>
+              <Textarea value={batchRollbackReason} onChange={(e) => setBatchRollbackReason(e.target.value)} placeholder="请说明批量退回原因" rows={3} />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setBatchRollbackOpen(false); setBatchRollbackReason(""); }}>取消</Button>
+              <Button className="bg-orange-500 hover:bg-orange-600 text-white" disabled={!batchRollbackReason.trim() || batchRollbackMutation.isPending} onClick={() => { if (batchRollbackReason.trim()) batchRollbackMutation.mutate({ ids: Array.from(selectedIds), reason: batchRollbackReason.trim() }); }}>
+                {batchRollbackMutation.isPending ? "退回中..." : `确认退回 ${selectedIds.size} 个`}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 退回确认弹窗 */}
+      <Dialog open={rollbackTargetId !== null} onOpenChange={(open) => { if (!open) { setRollbackTargetId(null); setRollbackReason(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Undo2 className="h-5 w-5 text-orange-500" />
+              退回上一步
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">订单将被退回到上一个流程节点，请填写退回原因。</p>
+            <div>
+              <Label>退回原因 *</Label>
+              <Textarea value={rollbackReason} onChange={(e) => setRollbackReason(e.target.value)} placeholder="请说明退回原因，如：价格有误需重新定价、车辆信息填写错误等" rows={3} />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setRollbackTargetId(null); setRollbackReason(""); }}>取消</Button>
+              <Button className="bg-orange-500 hover:bg-orange-600 text-white" disabled={!rollbackReason.trim() || rollbackMutation.isPending} onClick={() => { if (rollbackTargetId && rollbackReason.trim()) rollbackMutation.mutate({ id: rollbackTargetId, reason: rollbackReason.trim() }); }}>
+                {rollbackMutation.isPending ? "退回中..." : "确认退回"}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* 批量分配调度员弹窗 */}
+      <Dialog open={batchAssignOpen} onOpenChange={(open) => { if (!open) { setBatchAssignOpen(false); setBatchAssignDispatcherId(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-blue-500" />
+              批量分配调度员
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              已选择 <span className="font-medium text-foreground">{selectedIds.size}</span> 个订单，将统一分配给同一个调度员。分配后订单将进入待找车队列。
+            </p>
+            <div>
+              <Label>选择调度员 *</Label>
+              <Select value={batchAssignDispatcherId} onValueChange={setBatchAssignDispatcherId}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="选择调度员" />
+                </SelectTrigger>
+                <SelectContent>
+                  {outsourceDispatchers.map((d: any) => (
+                    <SelectItem key={d.id} value={String(d.id)}>
+                      {d.name || d.username}
+                      {d.regions?.length > 0 && <span className="text-xs text-muted-foreground ml-1">({d.regions.join("、")})</span>}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setBatchAssignOpen(false); setBatchAssignDispatcherId(""); }}>取消</Button>
+              <Button
+                disabled={!batchAssignDispatcherId || batchManualAssign.isPending}
+                onClick={() => {
+                  if (batchAssignDispatcherId) {
+                    batchManualAssign.mutate({
+                      orderIds: Array.from(selectedIds),
+                      dispatcherId: parseInt(batchAssignDispatcherId),
+                    });
+                  }
+                }}
+              >
+                {batchManualAssign.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                {batchManualAssign.isPending ? "分配中..." : `确认分配 ${selectedIds.size} 个`}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量审批弹窗 */}
+      <Dialog open={batchApproveOpen} onOpenChange={(open) => { if (!open) { setBatchApproveOpen(false); setBatchApproveComment(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {batchApproveAction === "approve" ? (
+                <><CheckCircle2 className="h-5 w-5 text-green-500" />批量审批通过</>
+              ) : (
+                <><XCircle className="h-5 w-5 text-red-500" />批量驳回</>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              已选择 <span className="font-medium text-foreground">{selectedIds.size}</span> 个订单，
+              {batchApproveAction === "approve"
+                ? "将对其中待审批的订单统一通过审批。"
+                : "将对其中待审批的订单统一驳回。"}
+            </p>
+            <div>
+              <Label>{batchApproveAction === "approve" ? "审批意见（可选）" : "驳回原因 *"}</Label>
+              <Textarea
+                value={batchApproveComment}
+                onChange={(e) => setBatchApproveComment(e.target.value)}
+                placeholder={batchApproveAction === "approve" ? "可填写审批意见" : "请填写驳回原因"}
+                rows={3}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setBatchApproveOpen(false); setBatchApproveComment(""); }}>取消</Button>
+              <Button
+                className={batchApproveAction === "approve" ? "bg-green-600 hover:bg-green-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}
+                disabled={(batchApproveAction === "reject" && !batchApproveComment.trim()) || batchApprove.isPending}
+                onClick={() => {
+                  // 找到选中订单对应的待审批记录ID
+                  const approvalItems = (approvalData?.items ?? []).filter((a: any) => selectedIds.has(a.orderId) && a.status === "pending");
+                  if (approvalItems.length === 0) {
+                    toast.error("选中的订单中没有待审批的记录");
+                    return;
+                  }
+                  batchApprove.mutate({
+                    ids: approvalItems.map((a: any) => a.id),
+                    action: batchApproveAction,
+                    approverComment: batchApproveComment.trim() || undefined,
+                  });
+                }}
+              >
+                {batchApprove.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                {batchApprove.isPending
+                  ? "处理中..."
+                  : batchApproveAction === "approve"
+                    ? `确认通过`
+                    : `确认驳回`}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 重新分配调度员弹窗 */}
+      <Dialog open={!!reassignDialog} onOpenChange={(open) => { if (!open) { setReassignDialog(null); setReassignDispatcherId(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-blue-500" />
+              重新分配调度员
+            </DialogTitle>
+          </DialogHeader>
+          {reassignDialog && (
+            <div className="space-y-4">
+              <div className="bg-muted/50 rounded-lg p-3 text-sm space-y-1">
+                <div className="font-mono font-medium">{reassignDialog.orderNumber || reassignDialog.systemCode}</div>
+                <div className="text-muted-foreground">
+                  {reassignDialog.originCity} → {reassignDialog.destinationCity} · {reassignDialog.weight ? `${reassignDialog.weight}吨` : ""}
+                </div>
+                <div className="text-xs">当前状态：{STATUS_LABELS[reassignDialog.status] || reassignDialog.status}</div>
+                {reassignDialog.autoAssignedRegion && <div className="text-xs">当前区域：{reassignDialog.autoAssignedRegion}</div>}
+              </div>
+              <div>
+                <Label>选择调度员</Label>
+                <Select value={reassignDispatcherId} onValueChange={setReassignDispatcherId}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="选择调度员" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {outsourceDispatchers.map((d: any) => (
+                      <SelectItem key={d.id} value={String(d.id)}>
+                        {d.name || d.username}
+                        {d.regions?.length > 0 && <span className="text-xs text-muted-foreground ml-1">({d.regions.join("、")})</span>}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setReassignDialog(null); setReassignDispatcherId(""); }}>取消</Button>
+                <Button
+                  disabled={!reassignDispatcherId || reassignMutation.isPending}
+                  onClick={() => {
+                    if (reassignDispatcherId) {
+                      reassignMutation.mutate({
+                        orderId: reassignDialog.id,
+                        dispatcherId: parseInt(reassignDispatcherId),
+                      });
+                    }
+                  }}
+                >
+                  {reassignMutation.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                  {reassignMutation.isPending ? "分配中..." : "确认分配"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 整组重新分配调度员弹窗 */}
+      <Dialog open={groupReassignOpen} onOpenChange={(open) => { if (!open) { setGroupReassignOpen(false); setGroupReassignInfo(null); setGroupReassignDispatcherId(""); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Layers className="h-5 w-5 text-purple-600" />
+              <UserPlus className="h-5 w-5 text-blue-500" />
+              整组重新分配调度员
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-purple-50 rounded-lg p-3 text-sm space-y-2">
+              {groupReassignInfo ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">合并计划号</span>
+                    <span className="font-mono font-bold text-purple-700">{groupReassignInfo.planNumber}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">订单数量</span>
+                    <Badge variant="outline" className="bg-purple-100 text-purple-700 border-purple-300">
+                      {groupReassignInfo.orderIds.length} 单
+                    </Badge>
+                  </div>
+                  {groupReassignInfo.currentDispatcher && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">当前调度员</span>
+                      <span className="text-orange-600 font-medium">{groupReassignInfo.currentDispatcher}</span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">已选订单</span>
+                  <Badge variant="outline" className="bg-purple-100 text-purple-700 border-purple-300">
+                    {selectedIds.size} 单
+                  </Badge>
+                </div>
+              )}
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+              ⚠️ 此操作将把选中的所有订单重新分配给新的调度员（不改变订单状态）
+            </div>
+            <div className="space-y-2">
+              <Label>选择新调度员 *</Label>
+              <Select value={groupReassignDispatcherId} onValueChange={setGroupReassignDispatcherId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="请选择调度员" />
+                </SelectTrigger>
+                <SelectContent>
+                  {allDispatchers.map((d: any) => (
+                    <SelectItem key={d.id} value={String(d.id)}>
+                      {d.name || d.username}
+                      {d.role === "fleet_dispatcher" && <span className="text-xs text-muted-foreground ml-1">(车队)</span>}
+                      {d.role === "outsource_dispatcher" && d.regions?.length > 0 && <span className="text-xs text-muted-foreground ml-1">({d.regions.join("、")})</span>}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setGroupReassignOpen(false); setGroupReassignInfo(null); setGroupReassignDispatcherId(""); }}>取消</Button>
+              <Button
+                disabled={!groupReassignDispatcherId || batchAssignMutation.isPending}
+                onClick={() => {
+                  const ids = groupReassignInfo ? groupReassignInfo.orderIds : Array.from(selectedIds);
+                  if (ids.length > 0 && groupReassignDispatcherId) {
+                    batchAssignMutation.mutate({
+                      orderIds: ids,
+                      dispatcherId: Number(groupReassignDispatcherId),
+                    });
+                  }
+                }}
+              >
+                {batchAssignMutation.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                {batchAssignMutation.isPending ? "分配中..." : `确认整组分配 (${groupReassignInfo ? groupReassignInfo.orderIds.length : selectedIds.size}单)`}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </DashboardLayout>
+  );
+}

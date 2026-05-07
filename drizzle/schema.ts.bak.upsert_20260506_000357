@@ -1,0 +1,644 @@
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  boolean,
+  decimal,
+  json,
+  bigint,
+  index,
+  datetime,
+} from "drizzle-orm/mysql-core";
+
+// ============================================================
+// 1. 用户表 (users) — 扩展模板自带表，支持10角色
+// ============================================================
+export const userRoles = [
+  "admin",           // 管理员
+  "order_entry",     // 录单员
+  "ltl_cs",          // 零担客服
+  "chain_cs",        // 连锁客服
+  "ltl_dispatcher",  // 零担调度员
+  "outsource_dispatcher", // 外请调度员
+  "fleet_dispatcher",     // 车队调度员
+  "field_manager",        // 现场管理员
+  "cs_manager",           // 客服经理
+  "finance_assistant",    // 财务助理
+] as const;
+
+export type UserRole = (typeof userRoles)[number];
+
+export const users = mysqlTable("users", {
+  id: int("id").autoincrement().primaryKey(),
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  username: varchar("username", { length: 64 }).unique(),
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  phone: varchar("phone", { length: 20 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", [
+    "admin", "order_entry", "ltl_cs", "chain_cs",
+    "ltl_dispatcher", "outsource_dispatcher", "fleet_dispatcher",
+    "field_manager", "cs_manager", "finance_assistant",
+  ]).default("order_entry").notNull(),
+  region: varchar("region", { length: 200 }),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
+// ============================================================
+// 2. 客户表 (customers)
+// ============================================================
+export const customers = mysqlTable("customers", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  phone: varchar("phone", { length: 20 }),
+  salesperson: varchar("salesperson", { length: 100 }),
+  settlementType: mysqlEnum("settlementType", ["monthly", "cash", "collect"]).default("monthly").notNull(),
+  department: varchar("department", { length: 100 }),
+  remarks: text("remarks"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Customer = typeof customers.$inferSelect;
+export type InsertCustomer = typeof customers.$inferInsert;
+
+// ============================================================
+// 3. 仓库表 (warehouses)
+// ============================================================
+export const warehouses = mysqlTable("warehouses", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  city: varchar("city", { length: 100 }),
+  address: text("address"),
+  phone: varchar("phone", { length: 20 }),
+  isActive: boolean("isActive").default(true).notNull(),
+  vehicleLength: varchar("vehicleLength", { length: 20 }),  // 车长：4.2米/6.8米/7.6米/9.6米/13米/17.5米
+  vehicleModel: varchar("vehicleModel", { length: 20 }),   // 车型：高栏/平板/厢式/飞翼
+  standardCapacity: decimal("standardCapacity", { precision: 10, scale: 2 }), // 标准载重吨位
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Warehouse = typeof warehouses.$inferSelect;
+export type InsertWarehouse = typeof warehouses.$inferInsert;
+
+// ============================================================
+// 4. 货站表 (freight_stations)
+// ============================================================
+export const freightStations = mysqlTable("freight_stations", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  address: text("address"),
+  phone: varchar("phone", { length: 20 }),
+  contactPerson: varchar("contactPerson", { length: 100 }),
+  coverageArea: text("coverageArea"),
+  remarks: text("remarks"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type FreightStation = typeof freightStations.$inferSelect;
+export type InsertFreightStation = typeof freightStations.$inferInsert;
+
+// ============================================================
+// 5. 车辆表 (vehicles)
+// ============================================================
+export const vehicles = mysqlTable("vehicles", {
+  id: int("id").autoincrement().primaryKey(),
+  plateNumber: varchar("plateNumber", { length: 20 }).notNull(),
+  vehicleType: mysqlEnum("vehicleType", ["own", "outsource"]).default("own").notNull(),
+  model: varchar("model", { length: 100 }),
+  capacity: decimal("capacity", { precision: 10, scale: 2 }),
+  driverId: int("driverId"),
+  status: mysqlEnum("status", ["available", "in_transit", "maintenance", "inactive"]).default("available").notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  // 零担车型扩展字段（与数据库实际列保持同步）
+  vehicleLength: varchar("vehicleLength", { length: 20 }),  // 车长：4.2米/6.8米/7.6米/9.6米/13米/17.5米
+  vehicleModel: varchar("vehicleModel", { length: 20 }),    // 车型：高栏/平板/厢式/飞翼
+  standardCapacity: decimal("standardCapacity", { precision: 10, scale: 2 }), // 标准载重吨位
+});
+
+export type Vehicle = typeof vehicles.$inferSelect;
+export type InsertVehicle = typeof vehicles.$inferInsert;
+
+// ============================================================
+// 6. 司机表 (drivers)
+// ============================================================
+export const drivers = mysqlTable("drivers", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  phone: varchar("phone", { length: 20 }),
+  idCard: varchar("idCard", { length: 20 }),
+  driverType: mysqlEnum("driverType", ["own", "outsource"]).default("own").notNull(),
+  commonPlateNumber: varchar("commonPlateNumber", { length: 20 }),
+  depositAmount: decimal("depositAmount", { precision: 10, scale: 2 }),
+  depositStatus: mysqlEnum("depositStatus", ["none", "paid", "refunded"]).default("none").notNull(),
+  remarks: text("remarks"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Driver = typeof drivers.$inferSelect;
+export type InsertDriver = typeof drivers.$inferInsert;
+
+// ============================================================
+// 7. 订单表 (orders) — 核心表，约40字段
+// ============================================================
+export const orderStatuses = [
+  "pending_assign",     // 待指派
+  "pending_dispatch",   // 待调度（自运）
+  "pending_price",      // 待定价（外请）
+  "priced",             // 已定价（外请）
+  "pending_vehicle",    // 待找车（外请）
+  "pending_approval",   // 待审批（外请）
+  "pending_inquiry",    // 待询价（零担）
+  "inquiry_confirmed",  // 已询价（零担）
+  "dispatched",         // 已调度
+  "in_transit",         // 运输中
+  "partial_delivered",  // 部分送达
+  "delivered",          // 已送达
+  "signed",             // 已签收
+  "settled",            // 已结算
+  "on_hold",            // 等通知
+  "cancelled",          // 已取消
+  "merged",             // 已合并（拼车子订单）
+] as const;
+
+export type OrderStatus = (typeof orderStatuses)[number];
+
+export const businessTypes = ["outsource", "self", "ltl"] as const;
+export type BusinessType = (typeof businessTypes)[number];
+
+export const entryQueueReasons = ["new", "returned", "rerouted"] as const;
+export type EntryQueueReason = (typeof entryQueueReasons)[number];
+
+export const ltlSubchainStages = ["pickup", "delivery"] as const;
+export type LtlSubchainStage = (typeof ltlSubchainStages)[number];
+
+export const podOwnershipModes = ["current_order", "delivery_outsource", "none"] as const;
+export type PodOwnershipMode = (typeof podOwnershipModes)[number];
+
+export const orders = mysqlTable("orders", {
+  id: int("id").autoincrement().primaryKey(),
+  // 订单标识
+  orderNumber: varchar("orderNumber", { length: 100 }).notNull(), // 客户订单号（主标识）
+  systemCode: varchar("systemCode", { length: 50 }).notNull(), // 系统内部编号（降级为内部用）
+  mergedPlanNumber: varchar("mergedPlanNumber", { length: 100 }), // 合并计划号（如P0000050961，多个子单关联）
+  // 业务分类
+  businessType: mysqlEnum("businessType", ["outsource", "self", "ltl"]).notNull(),
+  department: varchar("department", { length: 100 }),
+  status: mysqlEnum("status", [
+    "pending_assign", "pending_dispatch", "pending_price", "priced",
+    "pending_vehicle", "pending_approval", "pending_inquiry", "inquiry_confirmed",
+    "shipped", "dispatched", "in_transit", "partial_delivered", "delivered", "signed", "settled", "on_hold", "cancelled", "merged",
+  ]).default("pending_assign").notNull(),
+  entryQueueReason: mysqlEnum("entryQueueReason", ["new", "returned", "rerouted"]),
+  entryQueueSourceStatus: varchar("entryQueueSourceStatus", { length: 50 }),
+  entryQueueEnteredAt: timestamp("entryQueueEnteredAt"),
+  entryQueueReturnedBy: varchar("entryQueueReturnedBy", { length: 100 }),
+  entryQueueReturnReason: text("entryQueueReturnReason"),
+  isUrgent: boolean("isUrgent").default(false).notNull(),
+  urgentReason: text("urgentReason"),
+  // 客户信息
+  customerId: int("customerId"),
+  customerName: varchar("customerName", { length: 200 }),
+  customerPhone: varchar("customerPhone", { length: 20 }),
+  settlementType: mysqlEnum("settlementType_order", ["monthly", "cash", "collect"]).default("monthly"),
+  // 货物信息
+  cargoName: varchar("cargoName", { length: 200 }),
+  weight: decimal("weight", { precision: 10, scale: 3 }),
+  packagingType: mysqlEnum("packagingType", ["pallet", "loose", "pallet_loaded"]),
+  cargoSpec: text("cargoSpec"),
+  specialRequirements: text("specialRequirements"),
+  // 发货信息
+  warehouseId: int("warehouseId"),
+  warehouseName: varchar("warehouseName", { length: 200 }),
+  originCity: varchar("originCity", { length: 100 }),
+  originProvince: varchar("originProvince", { length: 100 }), // 发货省
+  // 收货信息
+  deliveryAddress: text("deliveryAddress"),
+  destinationCity: varchar("destinationCity", { length: 200 }),
+  destinationProvince: varchar("destinationProvince", { length: 100 }), // 收货省
+  receiverName: varchar("receiverName", { length: 100 }),
+  receiverPhone: varchar("receiverPhone", { length: 20 }),
+  // 费用信息
+  customerPrice: decimal("customerPrice", { precision: 14, scale: 4 }), // 客户给我们的价格
+  quotedPrice: decimal("quotedPrice", { precision: 14, scale: 4 }),
+  dispatchPrice: decimal("dispatchPrice", { precision: 14, scale: 4 }),
+  actualFreight: decimal("actualFreight", { precision: 14, scale: 4 }),
+  deliveryFee: decimal("deliveryFee", { precision: 14, scale: 4 }),
+  extraFee: decimal("extraFee", { precision: 14, scale: 4 }),
+  totalCost: decimal("totalCost", { precision: 14, scale: 4 }),
+  // 调度信息
+  assignedDispatcherId: int("assignedDispatcherId"),
+  holdReason: text("holdReason"),
+  releaseReason: text("releaseReason"),
+  holdBy: int("holdBy"),
+  holdAt: timestamp("holdAt"),
+  preHoldStatus: varchar("preHoldStatus", { length: 50 }),
+  preHoldAssignee: int("preHoldAssignee"),
+  driverId: int("driverId"),               // 关联司机表ID
+  vehicleId: int("vehicleId"),             // 关联车辆表ID
+  plateNumber: varchar("plateNumber", { length: 20 }),
+  driverName: varchar("driverName", { length: 100 }),
+  driverPhone: varchar("driverPhone", { length: 20 }),
+  freightStationId: int("freightStationId"),
+  freightStationName: varchar("freightStationName", { length: 200 }),
+  // 零担询价
+  ltlFinalStation: varchar("ltlFinalStation", { length: 200 }),
+  ltlFreightPrice: decimal("ltlFreightPrice", { precision: 14, scale: 4 }),
+  ltlInquiryStatus: mysqlEnum("ltlInquiryStatus", ["pending", "quoted", "confirmed", "cancelled"]),
+  // 押金信息（调度派车时填写）
+  depositAmount: decimal("depositAmount", { precision: 10, scale: 2 }),
+  depositRefundable: boolean("depositRefundable").default(true),
+  depositStatus: mysqlEnum("depositStatus_order", ["none", "paid", "refunded", "not_refundable"]).default("none").notNull(),
+  // 零担费用明细
+  ltlUnitPrice: decimal("ltlUnitPrice", { precision: 14, scale: 4 }), // 单价（元/吨）
+  ltlDeliveryFee: decimal("ltlDeliveryFee", { precision: 14, scale: 2 }), // 送货费
+  ltlOtherFee: decimal("ltlOtherFee", { precision: 14, scale: 2 }), // 其他费
+  // 货站运单信息
+  freightWaybillNumber: varchar("freightWaybillNumber", { length: 100 }), // 货站运单号
+  inquiryPhone: varchar("inquiryPhone", { length: 50 }), // 查货电话
+  // 大板标记
+  isLargeSlab: boolean("isLargeSlab").default(false), // 瓷砖大板（1800×900及以上）
+  chargeableWeight: decimal("chargeableWeight", { precision: 10, scale: 3 }), // 计费重量（大板整车用，如客户给的包车重量）
+  packageCount: int("packageCount"), // 架数/件数（大板零担用）
+  palletCount: int("palletCount"), // 托数（与架数分开存储）
+  largeSlabShippingRequired: boolean("largeSlabShippingRequired").default(false), // 是否按大板发货要求执行
+  // 货站开单图片（司机上传）
+  stationReceiptUrl: text("stationReceiptUrl"),
+  stationReceiptUploadedAt: timestamp("stationReceiptUploadedAt"),
+  // 回单状态
+  podStatus: mysqlEnum("podStatus", ["none", "uploaded", "verified", "original_sent", "original_received"]).default("none"),
+  // 回单唯一归属：当前订单负责 / 已转后段外请负责 / 当前订单不负责
+  podOwnership: mysqlEnum("podOwnership", ["current_order", "delivery_outsource", "none"]).default("current_order").notNull(),
+  // 自动分派
+  autoAssignedAt: timestamp("autoAssignedAt"),
+  autoAssignedRegion: varchar("autoAssignedRegion", { length: 200 }),
+  // 时间信息 - 完整的日期跟踪体系
+  orderDate: timestamp("orderDate"),           // 下单日期（客户下单时间）
+  dispatchDate: timestamp("dispatchDate"),     // 派车日期（确认派车时间）
+  loadingDate: timestamp("loadingDate"),       // 装货日期
+  transitDate: timestamp("transitDate"),       // 发车日期（开始运输时间）
+  deliveryDate: timestamp("deliveryDate"),     // 送货日期（到达目的地时间）
+  deliveredQty: decimal("deliveredQty", { precision: 10, scale: 3 }),
+  remainingQty: decimal("remainingQty", { precision: 10, scale: 3 }),
+  signedDate: timestamp("signedDate"),         // 签收日期（收货人签收时间）
+  signExceptionType: mysqlEnum("signExceptionType", ["damage", "shortage", "reject", "other"]),
+  exceptionQty: decimal("exceptionQty", { precision: 10, scale: 3 }),
+  damageDesc: text("damageDesc"),
+  rejectReason: text("rejectReason"),
+  evidenceUrls: json("evidenceUrls"),
+  signedBy: varchar("signedBy", { length: 100 }),
+  signedAttachments: json("signedAttachments"),
+  signedRemark: text("signedRemark"),
+  approvalDate: timestamp("approvalDate"),     // 审批日期（审批通过/驳回时间）
+  depositRefundDate: timestamp("depositRefundDate"), // 退押金日期
+  // 回单结算
+  podDate: timestamp("podDate"),               // 回单上传日期
+  podSentDate: timestamp("podSentDate"),       // 回单寄出日期
+  podTrackingNumber: varchar("podTrackingNumber", { length: 100 }), // 回单快递单号
+  verificationNumber: varchar("verificationNumber", { length: 100 }),
+  // 调度员备注（如付款条件、司机要求等）
+  dispatcherRemark: text("dispatcherRemark"),
+  // 发货备注（客服录单时填写，记录货物规格、多少托、多少板、包装要求等发货相关信息）
+  shippingNote: text("shippingNote"),
+  // 结构化收货确认
+  receivingStatus: mysqlEnum("receivingStatus", ["receivable", "wait_notice", "not_receivable"]),
+  expectedReceiveAt: timestamp("expectedReceiveAt"),
+  nextFollowUpAt: timestamp("nextFollowUpAt"),
+  receivingReason: text("receivingReason"),
+  // 收货备注（调度员联系收货人/业务员后填写的收货要求/补充说明）
+  receivingNote: text("receivingNote"),
+  receivingConfirmedAt: timestamp("receivingConfirmedAt"),
+  receivingConfirmedBy: int("receivingConfirmedBy"),
+  receivingConfirmedByName: varchar("receivingConfirmedByName", { length: 100 }),
+  // 合并订单（拼车）
+  parentId: int("parentId"),               // 父订单ID（拼车主订单）
+  relatedParentIds: json("relatedParentIds"),
+  subchainStage: mysqlEnum("subchainStage", ["pickup", "delivery"]),
+  ltlSegmentMode: varchar("ltlSegmentMode", { length: 50 }),
+  isMerged: boolean("isMerged").default(false), // 是否为合并主订单
+  // 其他备注
+  remarks: text("remarks"),
+  createdBy: int("createdBy"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  idxOrdersStatusCreatedAt: index("idx_orders_status_created_at").on(table.status, table.createdAt),
+  idxOrdersOrderDate: index("idx_orders_order_date").on(table.orderDate),
+  idxOrdersCustomerName: index("idx_orders_customer_name").on(table.customerName),
+  idxOrdersReceiverName: index("idx_orders_receiver_name").on(table.receiverName),
+  idxOrdersMergedPlanNumber: index("idx_orders_merged_plan_number").on(table.mergedPlanNumber),
+  idxOrdersPlateNumber: index("idx_orders_plate_number").on(table.plateNumber),
+  idxOrdersDriverName: index("idx_orders_driver_name").on(table.driverName),
+  idxOrdersAssignedDispatcherStatus: index("idx_orders_assigned_dispatcher_status").on(table.assignedDispatcherId, table.status),
+}));
+
+export type Order = typeof orders.$inferSelect;
+export type InsertOrder = typeof orders.$inferInsert;
+
+// ============================================================
+// 8. 审批记录表 (approvals)
+// ============================================================
+export const approvals = mysqlTable("approvals", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull(),
+  approvalType: mysqlEnum("approvalType", ["initial_price", "vehicle_quote", "surcharge"]).notNull(),
+  applicantId: int("applicantId").notNull(),
+  applicantName: varchar("applicantName", { length: 100 }),
+  approverId: int("approverId"),
+  approverName: varchar("approverName", { length: 100 }),
+  status: mysqlEnum("approvalStatus", ["pending", "approved", "rejected"]).default("pending").notNull(),
+  previousStatus: varchar("previousStatus", { length: 50 }),  // 审批前订单状态，驳回时精准回退
+  requestedAmount: decimal("requestedAmount", { precision: 14, scale: 4 }),
+  approvedAmount: decimal("approvedAmount", { precision: 14, scale: 4 }),
+  reason: text("reason"),
+  approverComment: text("approverComment"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  idxApprovalsOrderId: index("idx_approvals_order_id").on(table.orderId),
+  idxApprovalsStatus: index("idx_approvals_status").on(table.status),
+  idxApprovalsStatusCreatedAt: index("idx_approvals_status_created_at").on(table.status, table.createdAt),
+}));
+
+export type Approval = typeof approvals.$inferSelect;
+export type InsertApproval = typeof approvals.$inferInsert;
+
+// ============================================================
+// 9. 全局操作日志表 (operation_logs)
+// ============================================================
+export const operationLogs = mysqlTable("operation_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId"),
+  userName: varchar("userName", { length: 100 }),
+  action: varchar("action", { length: 50 }).notNull(),
+  targetType: varchar("targetType", { length: 50 }).notNull(),
+  targetId: varchar("targetId", { length: 100 }),
+  changes: json("changes"),
+  ipAddress: varchar("ipAddress", { length: 50 }),
+  description: text("description"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type OperationLog = typeof operationLogs.$inferSelect;
+export type InsertOperationLog = typeof operationLogs.$inferInsert;
+
+// ============================================================
+// 10. 调度员区域配置表 (dispatcher_regions)
+// ============================================================
+export const dispatcherRegions = mysqlTable("dispatcher_regions", {
+  id: int("id").autoincrement().primaryKey(),
+  dispatcherId: int("dispatcherId").notNull(),
+  province: varchar("province", { length: 100 }).notNull(),
+  city: varchar("city", { length: 100 }),
+  priority: int("priority").default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DispatcherRegion = typeof dispatcherRegions.$inferSelect;
+export type InsertDispatcherRegion = typeof dispatcherRegions.$inferInsert;
+
+// ============================================================
+// 11. 回单记录表 (pod_records)
+// ============================================================
+export const podRecords = mysqlTable("pod_records", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull(),
+  podOwnership: mysqlEnum("podOwnership", ["current_order", "delivery_outsource", "none"]).default("current_order").notNull(),
+  deliveryNoteUrl: text("deliveryNoteUrl"),
+  ocrResult: json("ocrResult"),
+  ocrVerified: boolean("ocrVerified").default(false),
+  ocrVerifiedBy: int("ocrVerifiedBy"),
+  ocrVerifiedAt: timestamp("ocrVerifiedAt"),
+  originalStatus: mysqlEnum("originalStatus", ["pending", "sent", "received", "lost"]).default("pending").notNull(),
+  originalSentAt: timestamp("originalSentAt"),
+  originalReceivedAt: timestamp("originalReceivedAt"),
+  originalReceivedBy: int("originalReceivedBy"),
+  depositLinked: boolean("depositLinked").default(false),
+  depositAmount: decimal("depositAmount", { precision: 10, scale: 2 }),
+  depositRefunded: boolean("depositRefunded").default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  idxPodRecordsOrderId: index("idx_pod_records_order_id").on(table.orderId),
+  idxPodRecordsOriginalStatus: index("idx_pod_records_original_status").on(table.originalStatus),
+  idxPodRecordsOrderStatus: index("idx_pod_records_order_status").on(table.orderId, table.originalStatus),
+}));
+
+export type PodRecord = typeof podRecords.$inferSelect;
+export type InsertPodRecord = typeof podRecords.$inferInsert;
+
+// ============================================================
+// 12. 零担询价记录表 (ltl_inquiries)
+// ============================================================
+export const ltlInquiries = mysqlTable("ltl_inquiries", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull(),
+  freightStationId: int("freightStationId").notNull(),
+  finalStationName: varchar("finalStationName", { length: 200 }),
+  quotedPrice: decimal("quotedPrice", { precision: 14, scale: 4 }),
+  confirmedPrice: decimal("confirmedPrice", { precision: 14, scale: 4 }),
+  unitPrice: decimal("unitPrice", { precision: 14, scale: 4 }), // 单价（元/吨）
+  deliveryFee: decimal("deliveryFee", { precision: 14, scale: 2 }), // 送货费
+  otherFee: decimal("otherFee", { precision: 14, scale: 2 }), // 其他费
+  packageCount: int("packageCount"), // 架数（大板零担用）
+  inquiryStatus: mysqlEnum("inquiryStatus", ["pending", "quoted", "confirmed", "cancelled"]).default("pending").notNull(),
+  inquiredBy: int("inquiredBy").notNull(),
+  remarks: text("remarks"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type LtlInquiry = typeof ltlInquiries.$inferSelect;
+export type InsertLtlInquiry = typeof ltlInquiries.$inferInsert;
+
+// ============================================================
+// 13. 角色权限配置表 (role_permissions)
+// ============================================================
+export const rolePermissions = mysqlTable("role_permissions", {
+  id: int("id").autoincrement().primaryKey(),
+  role: varchar("role", { length: 50 }).notNull(),
+  permissionKey: varchar("permissionKey", { length: 100 }).notNull(),
+  allowed: boolean("allowed").default(false).notNull(),
+  updatedBy: int("updatedBy"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type RolePermission = typeof rolePermissions.$inferSelect;
+export type InsertRolePermission = typeof rolePermissions.$inferInsert;
+
+// ============================================================
+// 配置表 — 业务部门 (departments)
+// ============================================================
+export const departments = mysqlTable("departments", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Department = typeof departments.$inferSelect;
+export type InsertDepartment = typeof departments.$inferInsert;
+
+// ============================================================
+// 配置表 — 货物类型 (cargo_types)
+// ============================================================
+export const cargoTypes = mysqlTable("cargo_types", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CargoType = typeof cargoTypes.$inferSelect;
+export type InsertCargoType = typeof cargoTypes.$inferInsert;
+
+// ============================================================
+// 14. 零担派车批次表 (ltl_dispatch_batches) — 按车次分组零担订单
+// ============================================================
+export const ltlDispatchBatches = mysqlTable("ltl_dispatch_batches", {
+  id: int("id").autoincrement().primaryKey(),
+  batchCode: varchar("batchCode", { length: 50 }).notNull(), // 批次号，如 LTL20260228001
+  plateNumber: varchar("plateNumber", { length: 20 }).notNull(),
+  driverName: varchar("driverName", { length: 100 }).notNull(),
+  driverPhone: varchar("driverPhone", { length: 20 }),
+  dispatchDate: timestamp("dispatchDate").defaultNow().notNull(),
+  remark: text("remark"),
+  vehicleLength: varchar("vehicleLength", { length: 20 }),
+  vehicleModel: varchar("vehicleModel", { length: 20 }),
+  capacity: decimal("capacity", { precision: 10, scale: 2 }),
+  createdBy: int("createdBy"),
+  createdByName: varchar("createdByName", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type LtlDispatchBatch = typeof ltlDispatchBatches.$inferSelect;
+export type InsertLtlDispatchBatch = typeof ltlDispatchBatches.$inferInsert;
+
+// ============================================================
+// 15. 零担派车批次-订单关联表 (ltl_dispatch_batch_orders)
+// ============================================================
+export const ltlDispatchBatchOrders = mysqlTable("ltl_dispatch_batch_orders", {
+  id: int("id").autoincrement().primaryKey(),
+  batchId: int("batchId").notNull(),
+  orderId: int("orderId").notNull(),
+  remark: text("remark"), // 每单备注（如运费信息、批次号等）
+  sortOrder: int("sortOrder").default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type LtlDispatchBatchOrder = typeof ltlDispatchBatchOrders.$inferSelect;
+export type InsertLtlDispatchBatchOrder = typeof ltlDispatchBatchOrders.$inferInsert;
+
+// ============================================================
+// 16. 超期通知记录表 (overdue_notifications) — 记录已发送的超期通知，用于去重和频率控制
+// ============================================================
+export const overdueNotifications = mysqlTable("overdue_notifications", {
+  id: int("id").autoincrement().primaryKey(),
+  podId: int("podId").notNull(),
+  orderId: int("orderId").notNull(),
+  level: mysqlEnum("level", ["yellow", "orange", "red"]).notNull(), // 预警级别
+  recipientRole: varchar("recipientRole", { length: 50 }).notNull(), // 接收者角色
+  recipientUserId: int("recipientUserId"), // 接收者用户ID（调度员时有值）
+  overdueDays: int("overdueDays").notNull(),
+  sentAt: timestamp("sentAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type OverdueNotification = typeof overdueNotifications.$inferSelect;
+export type InsertOverdueNotification = typeof overdueNotifications.$inferInsert;
+
+// ============================================================
+// 备注变更记录表 (note_change_logs)
+// ============================================================
+export const noteChangeLogs = mysqlTable("note_change_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  orderId: int("orderId").notNull(),
+  field: mysqlEnum("field", ["shippingNote", "receivingNote"]).notNull(),
+  oldValue: text("oldValue"),
+  newValue: text("newValue"),
+  changedByUserId: int("changedByUserId").notNull(),
+  changedByUserName: varchar("changedByUserName", { length: 100 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type NoteChangeLog = typeof noteChangeLogs.$inferSelect;
+export type InsertNoteChangeLog = typeof noteChangeLogs.$inferInsert;
+
+// ============================================================
+// 17. 智能粘贴模板记忆表 (paste_templates)
+// 记录每个客户的常用粘贴格式，用于LLM提示词优化
+// ============================================================
+export const pasteTemplates = mysqlTable("paste_templates", {
+  id: int("id").autoincrement().primaryKey(),
+  customerName: varchar("customerName", { length: 200 }).notNull(),
+  templateName: varchar("templateName", { length: 200 }), // 模板名称，如"XX客户标准格式"
+  sampleText: text("sampleText").notNull(), // 原始粘贴文本样本
+  fieldMapping: json("fieldMapping"), // 字段映射规则 JSON
+  successCount: int("successCount").default(0).notNull(), // 成功使用次数
+  lastUsedAt: timestamp("lastUsedAt"),
+  createdBy: int("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type PasteTemplate = typeof pasteTemplates.$inferSelect;
+export type InsertPasteTemplate = typeof pasteTemplates.$inferInsert;
+
+
+// ============================================================
+// 系统配置表 (systemConfig) — 键值对存储系统级配置
+// ============================================================
+export const systemConfig = mysqlTable("system_config", {
+  id: int("id").autoincrement().primaryKey(),
+  configKey: varchar("config_key", { length: 100 }).notNull().unique(),
+  configValue: text("config_value").notNull(),
+  description: varchar("description", { length: 255 }),
+  updatedById: int("updated_by_id"),
+  updatedByName: varchar("updated_by_name", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type SystemConfig = typeof systemConfig.$inferSelect;
+export type InsertSystemConfig = typeof systemConfig.$inferInsert;
+
+// ============================================================
+// 18. 外部市场参考运价表 (external_freight_rates)
+// 用于存储从满帮等外部数据源采集的市场参考运价，与公司实际运价隔离
+// ============================================================
+export const externalFreightRates = mysqlTable("external_freight_rates", {
+  id: int("id").autoincrement().primaryKey(),
+  originProvince: varchar("origin_province", { length: 64 }).notNull(),
+  originCity: varchar("origin_city", { length: 64 }).notNull(),
+  destinationProvince: varchar("destination_province", { length: 64 }).notNull(),
+  destinationCity: varchar("destination_city", { length: 64 }).notNull(),
+  distanceKm: int("distance_km"),
+  vehicleType: varchar("vehicle_type", { length: 32 }),
+  vehicleLength: decimal("vehicle_length", { precision: 5, scale: 2 }),
+  originalPrice: decimal("original_price", { precision: 12, scale: 2 }).notNull(),
+  unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull(),
+  tonnage: decimal("tonnage", { precision: 6, scale: 2 }).notNull(),
+  cargoName: varchar("cargo_name", { length: 128 }),
+  queryTime: datetime("query_time"),
+  dataSource: varchar("data_source", { length: 32 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export type ExternalFreightRate = typeof externalFreightRates.$inferSelect;
+export type InsertExternalFreightRate = typeof externalFreightRates.$inferInsert;

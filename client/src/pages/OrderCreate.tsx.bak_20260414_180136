@@ -1,0 +1,1490 @@
+import DashboardLayout from "@/components/DashboardLayout";
+import React from "react";
+import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  ArrowLeft,
+  Save,
+  AlertTriangle,
+  Loader2,
+  ClipboardPaste,
+  Sparkles,
+  Check,
+  Trash2,
+  PenLine,
+  Package,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+  Route,
+  Truck,
+} from "lucide-react";
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { useLocation } from "wouter";
+import { toast } from "sonner";
+import { groupOrdersByPlan } from "@/lib/utils";
+import { parseLtlSubchainSearch } from "./ltlSubchainPrefill";
+
+const BUSINESS_TYPE_LABELS: Record<string, string> = {
+  outsource: "外请",
+  self: "自运",
+  ltl: "零担",
+};
+
+const SETTLEMENT_LABELS: Record<string, string> = {
+  monthly: "月结",
+  cash: "现付",
+  collect: "到付",
+};
+
+const PACKAGING_LABELS: Record<string, string> = {
+  pallet: "托盘",
+  loose: "散装",
+  pallet_loaded: "带板装",
+};
+
+const CONFIDENCE_COLORS: Record<string, string> = {
+  high: "",
+  medium: "bg-yellow-50 border-yellow-200",
+  low: "bg-orange-50 border-orange-200",
+};
+
+// 大板检测函数：检测货物名称/规格/备注中是否包含大板关键词和规格
+function detectLargeSlab(cargoName: string, cargoSpec?: string, remarks?: string): {
+  isLargeSlab: boolean;
+  detectedKeywords: string[];
+  detectedSpecs: string[];
+} {
+  const textToCheck = `${cargoName} ${cargoSpec || ''} ${remarks || ''}`;
+  const keywords: string[] = [];
+  const specs: string[] = [];
+
+  // 检测关键词
+  const keywordPatterns = [
+    { pattern: /大板/g, label: "大板" },
+    { pattern: /铁架/g, label: "铁架" },
+    { pattern: /铁托/g, label: "铁托" },
+    { pattern: /岩板/g, label: "岩板" },
+  ];
+  for (const { pattern, label } of keywordPatterns) {
+    if (pattern.test(textToCheck)) {
+      keywords.push(label);
+    }
+  }
+
+  // 检测规格：1800×900及以上
+  const sizeRegex = /(\d+)\s*[*×xX]\s*(\d+)/g;
+  let match;
+  while ((match = sizeRegex.exec(textToCheck)) !== null) {
+    const w = parseInt(match[1]);
+    const h = parseInt(match[2]);
+    if ((w >= 1800 && h >= 900) || (h >= 1800 && w >= 900)) {
+      specs.push(`${match[1]}×${match[2]}`);
+    }
+  }
+
+  // 有大板相关关键词或大规格尺寸
+  const isLargeSlab = keywords.length > 0 || specs.length > 0;
+  return { isLargeSlab, detectedKeywords: keywords, detectedSpecs: specs };
+}
+
+type ParsedOrder = {
+  _uid: string; // 唯一标识，防止删除行时数据串位
+  customerName: string;
+  warehouseName: string;
+  orderNumber: string;
+  mergedPlanNumber: string;
+  customerPrice: string;
+  cargoName: string;
+  weight: string;
+  originCity: string;
+  destinationCity: string;
+  deliveryAddress: string;
+  receiverName: string;
+  receiverPhone: string;
+  shippingNote: string;
+  remarks: string;
+  isUrgent: boolean;
+  urgentReason: string;
+  isLargeSlab: boolean;
+  chargeableWeight: string;
+  packageCount: string;
+  confidence: Record<string, "high" | "medium" | "low">;
+};
+
+let _uidCounter = 0;
+function genUid(): string {
+  return `uid-${Date.now()}-${++_uidCounter}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export default function OrderCreate() {
+  const [location, setLocation] = useLocation();
+  const utils = trpc.useUtils();
+  const ltlSubchainPrefill = useMemo(
+    () => parseLtlSubchainSearch(typeof window !== "undefined" ? window.location.search : ""),
+    [location],
+  );
+  const returnPath = ltlSubchainPrefill?.returnPath || "/station/entry";
+  const [activeTab, setActiveTab] = useState(ltlSubchainPrefill ? "manual" : "smart-paste");
+
+  // ===== 手动录入 =====
+  const { data: customers } = trpc.customer.list.useQuery({ activeOnly: true });
+  const { data: warehouses } = trpc.warehouse.list.useQuery({ activeOnly: true });
+
+  const [form, setForm] = useState({
+    businessType: "outsource" as "outsource" | "self" | "ltl",
+    isUrgent: false,
+    urgentReason: "",
+    customerId: undefined as number | undefined,
+    customerName: "",
+    customerPhone: "",
+    settlementType: "monthly" as "monthly" | "cash" | "collect",
+    cargoName: "",
+    weight: "",
+    packagingType: "pallet" as "pallet" | "loose" | "pallet_loaded",
+    cargoSpec: "",
+    specialRequirements: "",
+    warehouseId: undefined as number | undefined,
+    warehouseName: "",
+    originCity: "",
+    deliveryAddress: "",
+    destinationCity: "",
+    receiverName: "",
+    receiverPhone: "",
+    quotedPrice: "",
+    orderNumber: "",
+    mergedPlanNumber: "",
+    customerPrice: "",
+    shippingNote: "",
+    remarks: "",
+    department: "",
+    // 大板相关字段
+    isLargeSlab: false,
+    chargeableWeight: "",
+    packageCount: undefined as number | undefined,
+  });
+
+  // 大板强制确认弹窗
+  const [largeSlabDialog, setLargeSlabDialog] = useState(false);
+  const [largeSlabDetection, setLargeSlabDetection] = useState<{
+    keywords: string[];
+    specs: string[];
+  }>({ keywords: [], specs: [] });
+  const [pendingSubmit, setPendingSubmit] = useState(false);
+
+  useEffect(() => {
+    if (!ltlSubchainPrefill) return;
+    setActiveTab("manual");
+    setForm((prev) => ({
+      ...prev,
+      ...ltlSubchainPrefill.defaults,
+      customerId: prev.customerId,
+      warehouseId: prev.warehouseId,
+      packagingType: prev.packagingType,
+      quotedPrice: prev.quotedPrice,
+      customerPrice: prev.customerPrice,
+      cargoSpec: prev.cargoSpec,
+      specialRequirements: prev.specialRequirements,
+      warehouseName: prev.warehouseName,
+      isUrgent: prev.isUrgent,
+      urgentReason: prev.urgentReason,
+      isLargeSlab: prev.isLargeSlab,
+      chargeableWeight: prev.chargeableWeight,
+      packageCount: prev.packageCount,
+    }));
+  }, [ltlSubchainPrefill]);
+
+  const updateStatusMutation = trpc.order.updateStatus.useMutation();
+  const createMutation = trpc.order.create.useMutation({
+    onSuccess: async (data) => {
+      utils.order.list.invalidate();
+      utils.order.stats.invalidate();
+      if (ltlSubchainPrefill) {
+        try {
+          await updateStatusMutation.mutateAsync({ id: data.id, status: "pending_price" });
+          toast.success(`已创建${ltlSubchainPrefill.stageLabel}，并转入外请待定价队列：${data.orderNumber}`);
+          setLocation(returnPath);
+          return;
+        } catch (err: any) {
+          toast.error(`子链已创建，但转入待定价失败：${err?.message || "请手动处理"}`);
+          setLocation(returnPath);
+          return;
+        }
+      }
+      toast.success(`订单已进入录单台待分流队列！订单号：${data.orderNumber}`);
+      setLocation("/station/entry");
+    },
+    onError: (err) => {
+      toast.error(`创建失败：${err.message}`);
+    },
+  });
+
+  const handleCustomerChange = (customerId: string) => {
+    const id = parseInt(customerId);
+    const customer = customers?.find((c) => c.id === id);
+    if (customer) {
+      setForm((prev) => ({
+        ...prev,
+        customerId: id,
+        customerName: customer.name,
+        customerPhone: customer.phone || "",
+        settlementType: (customer.settlementType as any) || "monthly",
+        department: customer.department || "",
+      }));
+    }
+  };
+
+  const handleWarehouseChange = (warehouseId: string) => {
+    const id = parseInt(warehouseId);
+    const warehouse = warehouses?.find((w) => w.id === id);
+    if (warehouse) {
+      setForm((prev) => ({
+        ...prev,
+        warehouseId: id,
+        warehouseName: warehouse.name,
+        originCity: warehouse.city || "",
+      }));
+    }
+  };
+
+  // 实际提交逻辑
+  const doSubmit = useCallback((formData: typeof form) => {
+    createMutation.mutate({
+      ...formData,
+      orderNumber: formData.orderNumber.trim(),
+      mergedPlanNumber: formData.mergedPlanNumber || undefined,
+      customerId: formData.customerId,
+      warehouseId: formData.warehouseId,
+      weight: formData.weight || undefined,
+      customerPrice: formData.customerPrice || undefined,
+      quotedPrice: formData.quotedPrice || undefined,
+      department: formData.department || undefined,
+      urgentReason: formData.urgentReason || undefined,
+      cargoSpec: formData.cargoSpec || undefined,
+      specialRequirements: formData.specialRequirements || undefined,
+      deliveryAddress: formData.deliveryAddress || undefined,
+      receiverName: formData.receiverName || undefined,
+      receiverPhone: formData.receiverPhone || undefined,
+      shippingNote: formData.shippingNote || undefined,
+      remarks: formData.remarks || undefined,
+      isLargeSlab: formData.isLargeSlab || undefined,
+      chargeableWeight: formData.chargeableWeight || undefined,
+      packageCount: formData.packageCount || undefined,
+      parentId: ltlSubchainPrefill?.parentId,
+      parentIds: ltlSubchainPrefill?.parentIds,
+      subchainStage: ltlSubchainPrefill?.stage,
+    });
+  }, [createMutation, ltlSubchainPrefill]);
+
+  // 表单验证错误字段高亮
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const handleSubmit = () => {
+    const errors: Record<string, string> = {};
+    if (!form.orderNumber.trim()) errors.orderNumber = "请填写客户订单号";
+    if (!form.customerName) errors.customerName = "请选择客户";
+    if (!form.destinationCity) errors.destinationCity = "请填写目的城市";
+    if (!form.cargoName) errors.cargoName = "请填写货物名称";
+    if (form.weight && (isNaN(parseFloat(form.weight)) || parseFloat(form.weight) < 0)) {
+      errors.weight = "重量不能为负数";
+    }
+    if (form.customerPrice && (isNaN(parseFloat(form.customerPrice)) || parseFloat(form.customerPrice) < 0)) {
+      errors.customerPrice = "客户报价不能为负数";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      const firstError = Object.values(errors)[0];
+      toast.error(firstError);
+      return;
+    }
+    setFormErrors({});
+
+    // 大板检测
+    const detection = detectLargeSlab(form.cargoName, form.cargoSpec, form.remarks);
+    if (detection.isLargeSlab && !form.isLargeSlab) {
+      // 检测到大板但用户未标记，弹出强制确认
+      setLargeSlabDetection({
+        keywords: detection.detectedKeywords,
+        specs: detection.detectedSpecs,
+      });
+      setLargeSlabDialog(true);
+      setPendingSubmit(true);
+      return;
+    }
+
+    // 大板必填字段校验
+    if (form.isLargeSlab) {
+      if (form.businessType !== "ltl" && !form.chargeableWeight) {
+        toast.error("大板整车订单必须填写计费重量（客户给的包车重量）");
+        return;
+      }
+      if (form.businessType === "ltl" && !form.packageCount) {
+        toast.error("大板零担订单必须填写架数");
+        return;
+      }
+    }
+
+    doSubmit(form);
+  };
+
+  // 大板确认弹窗：确认是大板
+  const handleConfirmLargeSlab = () => {
+    setForm((prev) => ({ ...prev, isLargeSlab: true }));
+    setLargeSlabDialog(false);
+    // 不自动提交，让用户填写大板必填字段
+    toast.info("已标记为大板订单，请填写计费重量或架数后再提交");
+  };
+
+  // 大板确认弹窗：确认不是大板
+  const handleDenyLargeSlab = () => {
+    setLargeSlabDialog(false);
+    if (pendingSubmit) {
+      setPendingSubmit(false);
+      doSubmit({ ...form, isLargeSlab: false });
+    }
+  };
+
+  // ===== 智能粘贴 =====
+  const [rawText, setRawText] = useState("");
+  const [parsedOrders, setParsedOrders] = useState<ParsedOrder[]>([]);
+  const [businessTypes, setBusinessTypes] = useState<string[]>([]);
+  const [isParsing, setIsParsing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
+  const [urgentConfirmOpen, setUrgentConfirmOpen] = useState(false);
+  const [pendingRemoveUid, setPendingRemoveUid] = useState<string | null>(null);
+
+  // 按合并计划号分组（用于预览表格的整组显示）
+  const parsedGroups = useMemo(() => {
+    if (parsedOrders.length === 0) return [];
+    return groupOrdersByPlan(parsedOrders.map((o, i) => ({ ...o, _idx: i })));
+  }, [parsedOrders]);
+
+  const togglePlanExpand = (planNumber: string) => {
+    setExpandedPlans(prev => {
+      const next = new Set(prev);
+      if (next.has(planNumber)) next.delete(planNumber);
+      else next.add(planNumber);
+      return next;
+    });
+  };
+
+  // 整组设置业务类型
+  const setGroupBusinessType = (planNumber: string, type: string) => {
+    setBusinessTypes(prev => {
+      const updated = [...prev];
+      parsedOrders.forEach((o, i) => {
+        if (o.mergedPlanNumber === planNumber) updated[i] = type;
+      });
+      return updated;
+    });
+  };
+
+  const parseMutation = trpc.smartPaste.parse.useMutation({
+    onSuccess: (data) => {
+      const orders = (data.orders || []).map((o: any) => ({ ...o, _uid: genUid() }));
+      setParsedOrders(orders);
+      setBusinessTypes(orders.map(() => "outsource"));
+      if (orders.length === 0) {
+        toast.warning("未能从文本中识别出订单信息，请检查输入内容");
+      } else {
+        // 检测每条订单是否有大板（优先使用LLM返回的isLargeSlab，再用前端detectLargeSlab补充检测shippingNote）
+        let largeSlabCount = 0;
+        for (const order of orders) {
+          if (order.isLargeSlab) {
+            largeSlabCount++;
+          } else {
+            const det = detectLargeSlab(order.cargoName, order.shippingNote || '', order.remarks);
+            if (det.isLargeSlab) {
+              (order as any).isLargeSlab = true;
+              largeSlabCount++;
+            }
+          }
+        }
+        if (largeSlabCount > 0) {
+          toast.info(`检测到 ${largeSlabCount} 条可能为大板订单，已自动标记，请确认`);
+        }
+        toast.success(`成功识别 ${orders.length} 条订单`);
+      }
+      setIsParsing(false);
+    },
+    onError: (err) => {
+      toast.error(`解析失败：${err.message}`);
+      setIsParsing(false);
+    },
+  });
+
+  const batchCreateMutation = trpc.order.batchCreate.useMutation();
+
+  const handleParse = () => {
+    if (!rawText.trim()) {
+      toast.error("请先粘贴文本内容");
+      return;
+    }
+    setIsParsing(true);
+    setParsedOrders([]);
+    setSubmitted(false);
+    parseMutation.mutate({ text: rawText });
+  };
+
+  const handleFieldEdit = (idx: number, field: string, value: string | boolean) => {
+    setParsedOrders((prev) => {
+      const updated = [...prev];
+      (updated[idx] as any)[field] = value;
+      return updated;
+    });
+  };
+
+  const handleRemoveOrder = (uid: string) => {
+    setParsedOrders((prev) => {
+      const removeIdx = prev.findIndex(o => o._uid === uid);
+      if (removeIdx === -1) return prev;
+      setBusinessTypes((bt) => bt.filter((_, i) => i !== removeIdx));
+      return prev.filter(o => o._uid !== uid);
+    });
+    setPendingRemoveUid(null);
+  };
+
+  // 点击提交按钮时，先做基本校验，再弹出加急确认弹窗
+  const handleBatchSubmitClick = () => {
+    if (parsedOrders.length === 0) return;
+    // 客户和货物必填校验
+    for (let i = 0; i < parsedOrders.length; i++) {
+      const order = parsedOrders[i];
+      if (!order.customerName?.trim()) {
+        toast.error(`第 ${i + 1} 条订单缺少客户名称，请填写后再提交`);
+        return;
+      }
+      if (!order.cargoName?.trim()) {
+        toast.error(`第 ${i + 1} 条订单缺少货物名称，请填写后再提交`);
+        return;
+      }
+      if (order.isUrgent && !order.urgentReason?.trim()) {
+        toast.error(`第 ${i + 1} 条订单标记为加急但未填写加急理由，请填写后再提交`);
+        return;
+      }
+    }
+    // 弹出加急确认弹窗，强制客服确认是否有加急订单
+    setUrgentConfirmOpen(true);
+  };
+
+  // 确认后真正执行提交（一次网络请求批量插入）
+  const handleBatchSubmit = async () => {
+    if (parsedOrders.length === 0) return;
+    setIsSubmitting(true);
+
+    // 构建批量提交数据
+    const batchData = parsedOrders.map((order, i) => {
+      const bt = businessTypes[i] || "outsource";
+      const custName = (order.customerName || "").trim();
+      const matchedCustomer = custName ? customers?.find(
+        (c) => c.name === custName || c.name.includes(custName) || custName.includes(c.name)
+      ) : undefined;
+      const det = order.isLargeSlab
+        ? { isLargeSlab: true }
+        : detectLargeSlab(order.cargoName, order.shippingNote || '', order.remarks);
+
+      return {
+        businessType: bt as "outsource" | "self" | "ltl",
+        isUrgent: order.isUrgent,
+        urgentReason: order.urgentReason || undefined,
+        customerId: matchedCustomer?.id,
+        customerName: custName || matchedCustomer?.name || undefined,
+        customerPhone: order.receiverPhone || undefined,
+        cargoName: order.cargoName || undefined,
+        weight: order.weight ? parseFloat(order.weight).toFixed(3) : undefined,
+        originCity: order.originCity || undefined,
+        destinationCity: order.destinationCity || undefined,
+        deliveryAddress: order.deliveryAddress || undefined,
+        receiverName: order.receiverName || undefined,
+        receiverPhone: order.receiverPhone || undefined,
+        orderNumber: order.orderNumber || `AUTO-${Date.now()}-${i}`,
+        mergedPlanNumber: order.mergedPlanNumber || undefined,
+        customerPrice: order.customerPrice || undefined,
+        shippingNote: order.shippingNote || undefined,
+        remarks: order.remarks || undefined,
+        warehouseName: order.warehouseName || undefined,
+        isLargeSlab: det.isLargeSlab || undefined,
+        chargeableWeight: order.chargeableWeight || undefined,
+        packageCount: order.packageCount ? parseInt(order.packageCount) : undefined,
+      };
+    });
+
+    try {
+      const result = await batchCreateMutation.mutateAsync({ orders: batchData });
+      setSubmitted(true);
+      utils.order.list.invalidate();
+      utils.order.stats.invalidate();
+      toast.success(`全部 ${result.count} 条订单已进入录单台待分流队列！`);
+    } catch (err: any) {
+      toast.error(`批量创建失败：${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <DashboardLayout>
+      <div className="space-y-4 max-w-6xl">
+        {/* 头部 */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={() => setLocation(returnPath)}>
+              <ArrowLeft className="h-4 w-4 mr-1" />
+              {ltlSubchainPrefill ? `返回${ltlSubchainPrefill.stageLabel}来源页` : "返回录单台"}
+            </Button>
+            <div>
+              <h1 className="text-xl font-semibold">{ltlSubchainPrefill ? `新建${ltlSubchainPrefill.stageLabel}` : "新建订单"}</h1>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {ltlSubchainPrefill
+                  ? `${ltlSubchainPrefill.helperText} 来源主单：${ltlSubchainPrefill.sourceLabel}。`
+                  : "订单提交后会先进入录单台“待分流”队列，再由录单台分流到外请、自运或零担。"}
+              </p>
+            </div>
+          </div>
+          {activeTab === "manual" && (
+            <Button onClick={handleSubmit} disabled={createMutation.isPending}>
+              {createMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4 mr-1" />
+              )}
+              {ltlSubchainPrefill ? "提交并进入外请待定价" : "提交并进入待分流"}
+            </Button>
+          )}
+        </div>
+
+        {ltlSubchainPrefill && (
+          <Card className="border-cyan-200 bg-cyan-50/70">
+            <CardContent className="flex flex-col gap-3 p-4 text-sm text-cyan-900">
+              <div className="flex items-start gap-3">
+                <Route className="mt-0.5 h-4 w-4 text-cyan-700" />
+                <div className="space-y-1">
+                  <div className="font-medium">{ltlSubchainPrefill.stageLabel}来源主单：{ltlSubchainPrefill.sourceLabel}</div>
+                  <div className="text-xs leading-5 text-cyan-800">{ltlSubchainPrefill.queueHint}</div>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="secondary" className="bg-white text-cyan-800 border border-cyan-200">来源主单：{ltlSubchainPrefill.sourceCount}单</Badge>
+                <Badge variant="secondary" className="bg-white text-cyan-800 border border-cyan-200">主单号：{ltlSubchainPrefill.parentOrderNumber || "未提供"}</Badge>
+                <Badge variant="secondary" className="bg-white text-cyan-800 border border-cyan-200">提交后流向：外请待定价</Badge>
+                <Badge variant="secondary" className="bg-white text-cyan-800 border border-cyan-200">链路阶段：{ltlSubchainPrefill.stage === "pickup" ? "待询价前的提货段" : "主链发运后的配送段"}</Badge>
+                {ltlSubchainPrefill.isCombinedLoad && (
+                  <Badge variant="secondary" className="bg-white text-cyan-800 border border-cyan-200">合车外请：同车承接多单</Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Tab切换 */}
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className={`grid w-full ${ltlSubchainPrefill ? "max-w-xs grid-cols-1" : "max-w-md grid-cols-2"}`}>
+            {!ltlSubchainPrefill && (
+              <TabsTrigger value="smart-paste" className="flex items-center gap-1.5">
+                <ClipboardPaste className="h-4 w-4" />
+                智能粘贴
+              </TabsTrigger>
+            )}
+            <TabsTrigger value="manual" className="flex items-center gap-1.5">
+              {ltlSubchainPrefill ? <Truck className="h-4 w-4" /> : <PenLine className="h-4 w-4" />}
+              {ltlSubchainPrefill ? `${ltlSubchainPrefill.stageLabel}建链` : "手动录入"}
+            </TabsTrigger>
+          </TabsList>
+
+          {/* ===== 手动录入 Tab ===== */}
+          <TabsContent value="manual" className="space-y-4 mt-4">
+            {/* 加急标记 */}
+            <Card className={form.isUrgent ? "border-red-300 bg-red-50/50" : ""}>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      checked={form.isUrgent}
+                      onCheckedChange={(checked) => setForm((p) => ({ ...p, isUrgent: checked }))}
+                    />
+                    <div>
+                      <span className="font-medium text-sm">加急订单</span>
+                      {form.isUrgent && (
+                        <Badge variant="destructive" className="ml-2 text-xs">
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          加急
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  {form.isUrgent && (
+                    <Input
+                      placeholder="加急原因"
+                      value={form.urgentReason}
+                      onChange={(e) => setForm((p) => ({ ...p, urgentReason: e.target.value }))}
+                      className="max-w-xs"
+                    />
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 大板标记 */}
+            <Card className={form.isLargeSlab ? "border-purple-300 bg-purple-50/50" : ""}>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      checked={form.isLargeSlab}
+                      onCheckedChange={(checked) => setForm((p) => ({
+                        ...p,
+                        isLargeSlab: checked,
+                        chargeableWeight: checked ? p.chargeableWeight : "",
+                        packageCount: checked ? p.packageCount : undefined,
+                      }))}
+                    />
+                    <div>
+                      <span className="font-medium text-sm">大板订单</span>
+                      {form.isLargeSlab && (
+                        <Badge className="ml-2 text-xs bg-purple-600">
+                          <Package className="h-3 w-3 mr-1" />
+                          大板
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  {form.isLargeSlab && (
+                    <div className="flex items-center gap-3">
+                      {form.businessType !== "ltl" ? (
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs text-purple-700 whitespace-nowrap">计费重量(吨) *</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder="如32"
+                            value={form.chargeableWeight}
+                            onChange={(e) => setForm((p) => ({ ...p, chargeableWeight: e.target.value }))}
+                            className="w-28 border-purple-300"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs text-purple-700 whitespace-nowrap">架数 *</Label>
+                          <Input
+                            type="number"
+                            step="1"
+                            min="1"
+                            placeholder="如3"
+                            value={form.packageCount ?? ""}
+                            onChange={(e) => setForm((p) => ({ ...p, packageCount: e.target.value ? parseInt(e.target.value) : undefined }))}
+                            className="w-20 border-purple-300"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {form.isLargeSlab && (
+                  <p className="text-xs text-purple-600 mt-2">
+                    {form.businessType !== "ltl"
+                      ? "整车大板：请填写客户给的包车重量（计费重量），系统将按计费重量计算单价并纳入30吨以上运价统计"
+                      : "零担大板：请填写架数，系统将按 总额÷架数 计算每架单价，纳入大板运价专区统计"}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* 业务信息 */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">业务信息</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">后续分流方向 *</Label>
+                      <Select
+                        value={form.businessType}
+                        onValueChange={(v) => setForm((p) => ({ ...p, businessType: v as any }))}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(BUSINESS_TYPE_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        这里只记录录单后的目标方向，订单创建成功后会统一进入“待分流”，再由录单台按该方向继续流转。
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">客户订单号 *</Label>
+                      <Input
+                        className={`mt-1 ${formErrors.orderNumber ? 'border-destructive ring-1 ring-destructive' : ''}`}
+                        placeholder="必填，如F0002214399"
+                        value={form.orderNumber}
+                        onChange={(e) => { setForm((p) => ({ ...p, orderNumber: e.target.value })); setFormErrors(prev => { const n = {...prev}; delete n.orderNumber; return n; }); }}
+                      />
+                      {formErrors.orderNumber && <p className="text-xs text-destructive mt-0.5">{formErrors.orderNumber}</p>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">客户 *</Label>
+                    <Select
+                      value={form.customerId ? String(form.customerId) : ""}
+                      onValueChange={(v) => { handleCustomerChange(v); setFormErrors(prev => { const n = {...prev}; delete n.customerName; return n; }); }}
+                    >
+                      <SelectTrigger className={`mt-1 ${formErrors.customerName ? 'border-destructive ring-1 ring-destructive' : ''}`}>
+                        <SelectValue placeholder="选择客户" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {customers?.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">联系电话</Label>
+                      <Input
+                        className="mt-1"
+                        value={form.customerPhone}
+                        onChange={(e) => setForm((p) => ({ ...p, customerPhone: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">结算方式</Label>
+                      <Select
+                        value={form.settlementType}
+                        onValueChange={(v) => setForm((p) => ({ ...p, settlementType: v as any }))}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(SETTLEMENT_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">合并计划号</Label>
+                      <Input
+                        className="mt-1"
+                        placeholder="如P0000050961"
+                        value={form.mergedPlanNumber}
+                        onChange={(e) => setForm((p) => ({ ...p, mergedPlanNumber: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">客户报价(元)</Label>
+                      <Input
+                        className="mt-1"
+                        type="number"
+                        step="0.01"
+                        placeholder="客户给的价格"
+                        value={form.customerPrice}
+                        onChange={(e) => setForm((p) => ({ ...p, customerPrice: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">部门 <span className="text-muted-foreground/60 font-normal">(内部分类，可选)</span></Label>
+                    <Input
+                      className="mt-1"
+                      placeholder="如：业务部、零担部"
+                      value={form.department}
+                      onChange={(e) => setForm((p) => ({ ...p, department: e.target.value }))}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* 货物信息 */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">货物信息</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">货物名称 *</Label>
+                    <Input
+                      className={`mt-1 ${formErrors.cargoName ? 'border-destructive ring-1 ring-destructive' : ''}`}
+                      placeholder="如：瓷砖、有色金属"
+                      value={form.cargoName}
+                      onChange={(e) => { setForm((p) => ({ ...p, cargoName: e.target.value })); setFormErrors(prev => { const n = {...prev}; delete n.cargoName; return n; }); }}
+                    />
+                    {formErrors.cargoName && <p className="text-xs text-destructive mt-0.5">{formErrors.cargoName}</p>}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">重量(吨)</Label>
+                      <Input
+                        className={`mt-1 ${formErrors.weight ? 'border-destructive ring-1 ring-destructive' : ''}`}
+                        type="number"
+                        step="0.001"
+                        min="0"
+                        placeholder="0.000"
+                        value={form.weight}
+                        onChange={(e) => { setForm((p) => ({ ...p, weight: e.target.value })); setFormErrors(prev => { const n = {...prev}; delete n.weight; return n; }); }}
+                      />
+                      {formErrors.weight && <p className="text-xs text-destructive mt-0.5">{formErrors.weight}</p>}
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">包装方式</Label>
+                      <Select
+                        value={form.packagingType}
+                        onValueChange={(v) => setForm((p) => ({ ...p, packagingType: v as any }))}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(PACKAGING_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">货物规格</Label>
+                    <Input
+                      className="mt-1"
+                      placeholder="如：800x800mm 瓷砖"
+                      value={form.cargoSpec}
+                      onChange={(e) => setForm((p) => ({ ...p, cargoSpec: e.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">特殊要求</Label>
+                    <Textarea
+                      className="mt-1"
+                      placeholder="如：需要篷布覆盖、轻拿轻放"
+                      rows={2}
+                      value={form.specialRequirements}
+                      onChange={(e) => setForm((p) => ({ ...p, specialRequirements: e.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">报价(元/吨)</Label>
+                    <Input
+                      className="mt-1"
+                      type="number"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.quotedPrice}
+                      onChange={(e) => setForm((p) => ({ ...p, quotedPrice: e.target.value }))}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* 发货信息 */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">发货信息</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">发货仓库</Label>
+                    <Select
+                      value={form.warehouseId ? String(form.warehouseId) : ""}
+                      onValueChange={handleWarehouseChange}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="选择仓库" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {warehouses?.map((w) => (
+                          <SelectItem key={w.id} value={String(w.id)}>
+                            {w.name} ({w.city || "未设置城市"})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">发货城市</Label>
+                    <Input
+                      className="mt-1"
+                      placeholder="如：佛山"
+                      value={form.originCity}
+                      onChange={(e) => setForm((p) => ({ ...p, originCity: e.target.value }))}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* 收货信息 */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium">收货信息</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">目的城市 *</Label>
+                    <Input
+                      className={`mt-1 ${formErrors.destinationCity ? 'border-destructive ring-1 ring-destructive' : ''}`}
+                      placeholder="如：成都"
+                      value={form.destinationCity}
+                      onChange={(e) => { setForm((p) => ({ ...p, destinationCity: e.target.value })); setFormErrors(prev => { const n = {...prev}; delete n.destinationCity; return n; }); }}
+                    />
+                    {formErrors.destinationCity && <p className="text-xs text-destructive mt-0.5">{formErrors.destinationCity}</p>}
+                  </div>
+
+                  <div>
+                    <Label className="text-xs text-muted-foreground">收货地址</Label>
+                    <Input
+                      className="mt-1"
+                      placeholder="详细收货地址"
+                      value={form.deliveryAddress}
+                      onChange={(e) => setForm((p) => ({ ...p, deliveryAddress: e.target.value }))}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-muted-foreground">收货人</Label>
+                      <Input
+                        className="mt-1"
+                        value={form.receiverName}
+                        onChange={(e) => setForm((p) => ({ ...p, receiverName: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">收货人电话</Label>
+                      <Input
+                        className="mt-1"
+                        value={form.receiverPhone}
+                        onChange={(e) => setForm((p) => ({ ...p, receiverPhone: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* 发运与备注 */}
+            <Card>
+              <CardContent className="space-y-4 p-4">
+                <div>
+                  <Label className="text-xs text-muted-foreground">发运提示 / 货站交接说明</Label>
+                  <Textarea
+                    className="mt-1"
+                    placeholder="如：联系提货点后先送入指定货站，注意交接时效"
+                    rows={2}
+                    value={form.shippingNote}
+                    onChange={(e) => setForm((p) => ({ ...p, shippingNote: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">📦 备注（货物规格、多少托/板、包装要求等）</Label>
+                  <Textarea
+                    className="mt-1"
+                    placeholder="如：2托大板，尺寸 2.4m×1.2m，需平板车"
+                    rows={2}
+                    value={form.remarks}
+                    onChange={(e) => setForm((p) => ({ ...p, remarks: e.target.value }))}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 底部提交 */}
+            <div className="flex justify-end gap-3 pb-4">
+              <Button variant="outline" onClick={() => setLocation(returnPath)}>
+                取消
+              </Button>
+              <Button onClick={handleSubmit} disabled={createMutation.isPending}>
+                {createMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4 mr-1" />
+                )}
+                提交订单
+              </Button>
+            </div>
+          </TabsContent>
+
+          {/* ===== 智能粘贴 Tab ===== */}
+          <TabsContent value="smart-paste" className="space-y-4 mt-4">
+            {/* 粘贴区域 */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-amber-500" />
+                  粘贴微信消息或文本
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea
+                  placeholder={"将微信聊天记录或文本粘贴到这里...\n\n示例：\n张总 佛山发成都 瓷砖10吨 收货人李明 13800138000 地址：成都市武侯区XX路XX号\n\n系统将自动识别客户、货物、地址等信息\n大板订单会自动检测并标记"}
+                  rows={6}
+                  value={rawText}
+                  onChange={(e) => setRawText(e.target.value)}
+                  className="font-mono text-sm"
+                />
+                <div className="flex items-center gap-2">
+                  <Button onClick={handleParse} disabled={isParsing || !rawText.trim()}>
+                    {isParsing ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 mr-1" />
+                    )}
+                    {isParsing ? "AI识别中..." : "智能识别"}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    支持多条订单同时识别，大板订单自动检测标记
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 识别结果 */}
+            {parsedOrders.length > 0 && (
+              <>
+              {/* 加急标记区域 - 放在识别结果最上方，最醒目位置 */}
+              <Card className={`border-2 ${parsedOrders.some(o => o.isUrgent) ? 'border-red-500 bg-red-50' : 'border-amber-400 bg-amber-50'}`}>
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-shrink-0">
+                      <AlertTriangle className={`h-8 w-8 ${parsedOrders.some(o => o.isUrgent) ? 'text-red-600 animate-pulse' : 'text-amber-600'}`} />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="text-base font-bold text-gray-900">本批订单是否加急？</span>
+                        <Switch
+                          checked={parsedOrders.some(o => o.isUrgent)}
+                          onCheckedChange={(checked) => {
+                            parsedOrders.forEach((_, i) => {
+                              handleFieldEdit(i, "isUrgent", checked);
+                              if (!checked) handleFieldEdit(i, "urgentReason", "");
+                            });
+                          }}
+                          className="data-[state=checked]:bg-red-600"
+                        />
+                        {parsedOrders.some(o => o.isUrgent) ? (
+                          <Badge variant="destructive" className="text-sm px-3 py-1 animate-pulse">
+                            <AlertTriangle className="h-4 w-4 mr-1" />
+                            加急订单
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-sm px-3 py-1 bg-green-100 text-green-700 border-green-300">
+                            普通订单
+                          </Badge>
+                        )}
+                      </div>
+                      {parsedOrders.some(o => o.isUrgent) && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-red-700">加急理由（必填）：</span>
+                          <Input
+                            className="flex-1 border-red-300 bg-white focus:border-red-500 text-sm"
+                            placeholder="请填写加急理由，如：客户催件、工期紧张等"
+                            value={parsedOrders[0]?.urgentReason || ""}
+                            onChange={(e) => {
+                              parsedOrders.forEach((_, i) => handleFieldEdit(i, "urgentReason", e.target.value));
+                            }}
+                          />
+                        </div>
+                      )}
+                      {!parsedOrders.some(o => o.isUrgent) && (
+                        <p className="text-xs text-amber-700">提交前请确认是否需要加急处理，加急订单将优先调度</p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-medium">
+                      识别结果（{parsedOrders.length} 条订单）
+                    </CardTitle>
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <div className="w-3 h-3 bg-yellow-50 border border-yellow-200 rounded" />
+                      <span>中等置信</span>
+                      <div className="w-3 h-3 bg-orange-50 border border-orange-200 rounded ml-2" />
+                      <span>低置信</span>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {parsedGroups.map((group, gIdx) => {
+                      const isGrouped = group.planNumber !== null && group.orderCount > 1;
+                      const isExpanded = group.planNumber ? expandedPlans.has(group.planNumber) : true;
+
+                      if (isGrouped) {
+                        const firstOrder = group.orders[0];
+                        const firstIdx = (firstOrder as any)._idx;
+                        return (
+                          <div key={`group-${group.planNumber}`} className="border rounded-lg overflow-hidden">
+                            {/* 组头卡片 - 两行布局 */}
+                            <div className="border-l-4 border-l-blue-500 bg-blue-50/80 p-3 relative">
+                              {/* 第一行：基础信息 */}
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => togglePlanExpand(group.planNumber!)}>
+                                  {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                </Button>
+                                <Select value={businessTypes[firstIdx] || "outsource"} onValueChange={(v) => setGroupBusinessType(group.planNumber!, v)}>
+                                  <SelectTrigger className="h-7 text-sm w-20"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {Object.entries(BUSINESS_TYPE_LABELS).map(([k, v]) => (<SelectItem key={k} value={k}>{v}</SelectItem>))}
+                                  </SelectContent>
+                                </Select>
+                                <div className="flex items-center gap-1">
+                                  <Layers className="h-4 w-4 text-blue-600" />
+                                  <span className="font-semibold text-blue-700 text-sm">{group.planNumber}</span>
+                                  <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-700 border-blue-300">{group.orderCount}单</Badge>
+                                </div>
+                                <span className="text-xs text-muted-foreground">|</span>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">客户:</span>
+                                  <Input className="h-7 text-sm w-24" value={firstOrder.customerName || ""} onChange={(e) => { group.orders.forEach((o: any) => handleFieldEdit(o._idx, "customerName", e.target.value)); }} placeholder="客户名 *" />
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">货物:</span>
+                                  <Input className="h-7 text-sm w-20" value={firstOrder.cargoName || ""} onChange={(e) => { group.orders.forEach((o: any) => handleFieldEdit(o._idx, "cargoName", e.target.value)); }} placeholder="货物名 *" />
+                                </div>
+                                <span className="text-sm font-bold text-blue-700">{group.totalWeight.toFixed(3)}t</span>
+                                <span className="text-xs text-muted-foreground">|</span>
+                                <span className="text-xs">{firstOrder.originCity || "-"} → {firstOrder.destinationCity || "-"}</span>
+                                <span className="text-xs text-muted-foreground">仓库: {firstOrder.warehouseName || "-"}</span>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">报价:</span>
+                                  <Input className="h-7 text-sm w-24" placeholder="输入总价分摊"
+                                    defaultValue={(() => { const t = group.orders.reduce((s: number, o: any) => s + (parseFloat(o.customerPrice) || 0), 0); return t > 0 ? t.toFixed(2) : ""; })()}
+                                    onBlur={(e) => {
+                                      const totalPrice = parseFloat(e.target.value);
+                                      if (!totalPrice || totalPrice <= 0) return;
+                                      const totalWeight = group.orders.reduce((s: number, o: any) => s + (parseFloat(o.weight) || 0), 0);
+                                      if (totalWeight <= 0) {
+                                        const avg = (totalPrice / group.orders.length).toFixed(2);
+                                        group.orders.forEach((o: any, i: number) => {
+                                          handleFieldEdit(o._idx, "customerPrice", i === group.orders.length - 1 ? (totalPrice - parseFloat(avg) * (group.orders.length - 1)).toFixed(2) : avg);
+                                        });
+                                      } else {
+                                        let allocated = 0;
+                                        group.orders.forEach((o: any, i: number) => {
+                                          const w = parseFloat(o.weight) || 0;
+                                          if (i === group.orders.length - 1) { handleFieldEdit(o._idx, "customerPrice", (totalPrice - allocated).toFixed(2)); }
+                                          else { const share = Math.round(totalPrice * (w / totalWeight) * 100) / 100; allocated += share; handleFieldEdit(o._idx, "customerPrice", share.toFixed(2)); }
+                                        });
+                                      }
+                                      toast.success(`已按吨位分摊运费收入 ¥${totalPrice.toFixed(2)} 到 ${group.orders.length} 个子订单`);
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                              {/* 大板标记 - 右上角 */}
+                              {group.orders.some((o: any) => o.isLargeSlab || detectLargeSlab(o.cargoName, o.shippingNote || '', o.remarks).isLargeSlab) && (
+                                <Badge className="text-[10px] bg-purple-600 absolute top-2 right-2">大板</Badge>
+                              )}
+                              {/* 第二行：地址、备注、发货备注 */}
+                              <div className="flex items-start gap-3 flex-wrap mt-2 pl-9">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">地址:</span>
+                                  <span className="text-xs">{firstOrder.deliveryAddress || "-"}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">收货人:</span>
+                                  <span className="text-xs">{firstOrder.receiverName || "-"}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">电话:</span>
+                                  <span className="text-xs">{firstOrder.receiverPhone || "-"}</span>
+                                </div>
+                                <span className="text-xs text-muted-foreground">|</span>
+                                <div className="flex items-center gap-1 flex-1 min-w-[200px]">
+                                  <span className="text-xs text-muted-foreground whitespace-nowrap">备注:</span>
+                                  <Input className="h-7 text-xs flex-1" value={firstOrder.remarks || ""} onChange={(e) => { group.orders.forEach((o: any) => handleFieldEdit(o._idx, "remarks", e.target.value)); }} placeholder="备注" />
+                                </div>
+                                <div className="flex items-center gap-1 flex-1 min-w-[250px]">
+                                  <span className="text-xs text-muted-foreground whitespace-nowrap">发货备注:</span>
+                                  <Input className="h-7 text-xs flex-1 bg-yellow-50 border-yellow-300" value={(firstOrder as any).shippingNote || ""} onChange={(e) => { group.orders.forEach((o: any) => handleFieldEdit(o._idx, "shippingNote", e.target.value)); }} placeholder="规格、托数等发货注意事项" />
+                                </div>
+                              </div>
+                            </div>
+                            {/* 子运单行 */}
+                            {isExpanded && group.orders.map((order) => {
+                              const idx = (order as any)._idx;
+                              const det = order.isLargeSlab ? { isLargeSlab: true, detectedKeywords: [], detectedSpecs: [] } : detectLargeSlab(order.cargoName, order.shippingNote || '', order.remarks);
+                              return (
+                                <div key={order._uid} className={`border-t px-3 py-2 relative ${det.isLargeSlab ? "bg-purple-50/50" : "bg-blue-50/30"}`}>
+                                  {/* 子订单第一行 */}
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs text-muted-foreground w-8 pl-4">└ {idx + 1}</span>
+                                    <span className="text-[10px] text-muted-foreground">{BUSINESS_TYPE_LABELS[businessTypes[idx] || "outsource"]}</span>
+                                    <Input className={`h-7 text-sm w-32 ${CONFIDENCE_COLORS[order.confidence?.orderNumber || "high"]}`} value={order.orderNumber} onChange={(e) => handleFieldEdit(idx, "orderNumber", e.target.value)} />
+                                    <Input className={`h-7 text-sm w-24 ${CONFIDENCE_COLORS[order.confidence?.customerName || "high"]}`} value={order.customerName} onChange={(e) => handleFieldEdit(idx, "customerName", e.target.value)} />
+                                    <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.cargoName || "high"]}`} value={order.cargoName} onChange={(e) => handleFieldEdit(idx, "cargoName", e.target.value)} />
+                                    <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.weight || "high"]}`} value={order.weight} onChange={(e) => handleFieldEdit(idx, "weight", e.target.value)} />
+                                    <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.originCity || "high"]}`} value={order.originCity} onChange={(e) => handleFieldEdit(idx, "originCity", e.target.value)} />
+                                    <Input className={`h-7 text-sm w-24 ${CONFIDENCE_COLORS[order.confidence?.warehouseName || "high"]}`} value={order.warehouseName || ""} onChange={(e) => handleFieldEdit(idx, "warehouseName", e.target.value)} placeholder="仓库" />
+                                    <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.destinationCity || "high"]}`} value={order.destinationCity} onChange={(e) => handleFieldEdit(idx, "destinationCity", e.target.value)} />
+                                    <Input className={`h-7 text-sm w-24 ${CONFIDENCE_COLORS[order.confidence?.customerPrice || "high"]}`} value={order.customerPrice || ""} onChange={(e) => handleFieldEdit(idx, "customerPrice", e.target.value)} placeholder="元" />
+                                  </div>
+                                  {/* 大板+删除 - 右上角 */}
+                                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                                    {det.isLargeSlab && <Badge className="text-[10px] bg-purple-600">大板</Badge>}
+                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-500 hover:bg-red-50" onClick={() => setPendingRemoveUid(order._uid)}><Trash2 className="h-3 w-3" /></Button>
+                                  </div>
+                                  {/* 子订单第二行 */}
+                                  <div className="flex items-center gap-2 flex-wrap mt-1 pl-12">
+                                    <Input className={`h-7 text-xs flex-1 min-w-[150px] ${CONFIDENCE_COLORS[order.confidence?.deliveryAddress || "high"]}`} value={order.deliveryAddress || ""} onChange={(e) => handleFieldEdit(idx, "deliveryAddress", e.target.value)} placeholder="详细地址" />
+                                    <Input className={`h-7 text-xs w-20 ${CONFIDENCE_COLORS[order.confidence?.receiverName || "high"]}`} value={order.receiverName || ""} onChange={(e) => handleFieldEdit(idx, "receiverName", e.target.value)} placeholder="收货人" />
+                                    <Input className={`h-7 text-xs w-28 ${CONFIDENCE_COLORS[order.confidence?.receiverPhone || "high"]}`} value={order.receiverPhone || ""} onChange={(e) => handleFieldEdit(idx, "receiverPhone", e.target.value)} placeholder="电话" />
+                                    <Input className={`h-7 text-xs flex-1 min-w-[120px] ${CONFIDENCE_COLORS[order.confidence?.remarks || "high"]}`} value={order.remarks || ""} onChange={(e) => handleFieldEdit(idx, "remarks", e.target.value)} placeholder="备注" />
+                                    <Input className="h-7 text-xs flex-1 min-w-[150px] bg-yellow-50 border-yellow-300" value={(order as any).shippingNote || ""} onChange={(e) => handleFieldEdit(idx, "shippingNote", e.target.value)} placeholder="发货备注" />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      }
+
+                      // 单独订单卡片 - 两行布局
+                      const order = group.orders[0];
+                      const idx = (order as any)._idx;
+                      const det = order.isLargeSlab ? { isLargeSlab: true, detectedKeywords: [], detectedSpecs: [] } : detectLargeSlab(order.cargoName, order.shippingNote || '', order.remarks);
+                      return (
+                        <div key={order._uid} className={`border rounded-lg p-3 relative ${det.isLargeSlab ? "bg-purple-50/50 border-purple-200" : ""}`}>
+                          {/* 第一行：基础信息 */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-muted-foreground w-6">{idx + 1}</span>
+                            <Select value={businessTypes[idx] || "outsource"} onValueChange={(v) => { setBusinessTypes((prev) => { const u = [...prev]; u[idx] = v; return u; }); }}>
+                              <SelectTrigger className="h-7 text-sm w-20"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {Object.entries(BUSINESS_TYPE_LABELS).map(([k, v]) => (<SelectItem key={k} value={k}>{v}</SelectItem>))}
+                              </SelectContent>
+                            </Select>
+                            <Input className={`h-7 text-sm w-32 ${CONFIDENCE_COLORS[order.confidence?.orderNumber || "high"]}`} value={order.orderNumber} onChange={(e) => handleFieldEdit(idx, "orderNumber", e.target.value)} />
+                            <Input className={`h-7 text-sm w-28 ${CONFIDENCE_COLORS[order.confidence?.mergedPlanNumber || "high"]}`} value={order.mergedPlanNumber || ""} onChange={(e) => handleFieldEdit(idx, "mergedPlanNumber", e.target.value)} placeholder="合并计划号" />
+                            <Input className={`h-7 text-sm w-24 ${CONFIDENCE_COLORS[order.confidence?.customerName || "high"]}`} value={order.customerName} onChange={(e) => handleFieldEdit(idx, "customerName", e.target.value)} placeholder="客户 *" />
+                            <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.cargoName || "high"]}`} value={order.cargoName} onChange={(e) => handleFieldEdit(idx, "cargoName", e.target.value)} placeholder="货物 *" />
+                            <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.weight || "high"]}`} value={order.weight} onChange={(e) => handleFieldEdit(idx, "weight", e.target.value)} />
+                            <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.originCity || "high"]}`} value={order.originCity} onChange={(e) => handleFieldEdit(idx, "originCity", e.target.value)} />
+                            <Input className={`h-7 text-sm w-24 ${CONFIDENCE_COLORS[order.confidence?.warehouseName || "high"]}`} value={order.warehouseName || ""} onChange={(e) => handleFieldEdit(idx, "warehouseName", e.target.value)} placeholder="仓库" />
+                            <Input className={`h-7 text-sm w-20 ${CONFIDENCE_COLORS[order.confidence?.destinationCity || "high"]}`} value={order.destinationCity} onChange={(e) => handleFieldEdit(idx, "destinationCity", e.target.value)} />
+                            <Input className={`h-7 text-sm w-24 ${CONFIDENCE_COLORS[order.confidence?.customerPrice || "high"]}`} value={order.customerPrice || ""} onChange={(e) => handleFieldEdit(idx, "customerPrice", e.target.value)} placeholder="元" />
+                          </div>
+                          {/* 大板+删除 - 右上角 */}
+                          <div className="absolute top-2 right-2 flex items-center gap-1">
+                            {det.isLargeSlab && <Badge className="text-[10px] bg-purple-600">大板</Badge>}
+                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-500 hover:bg-red-50" onClick={() => setPendingRemoveUid(order._uid)}><Trash2 className="h-3 w-3" /></Button>
+                          </div>
+                          {/* 第二行：地址、备注、发货备注 */}
+                          <div className="flex items-center gap-2 flex-wrap mt-2 pl-8">
+                            <Input className={`h-7 text-xs flex-1 min-w-[150px] ${CONFIDENCE_COLORS[order.confidence?.deliveryAddress || "high"]}`} value={order.deliveryAddress || ""} onChange={(e) => handleFieldEdit(idx, "deliveryAddress", e.target.value)} placeholder="详细地址" />
+                            <Input className={`h-7 text-xs w-20 ${CONFIDENCE_COLORS[order.confidence?.receiverName || "high"]}`} value={order.receiverName || ""} onChange={(e) => handleFieldEdit(idx, "receiverName", e.target.value)} placeholder="收货人" />
+                            <Input className={`h-7 text-xs w-28 ${CONFIDENCE_COLORS[order.confidence?.receiverPhone || "high"]}`} value={order.receiverPhone || ""} onChange={(e) => handleFieldEdit(idx, "receiverPhone", e.target.value)} placeholder="电话" />
+                            <Input className={`h-7 text-xs flex-1 min-w-[120px] ${CONFIDENCE_COLORS[order.confidence?.remarks || "high"]}`} value={order.remarks || ""} onChange={(e) => handleFieldEdit(idx, "remarks", e.target.value)} placeholder="备注" />
+                            <Input className="h-7 text-xs flex-1 min-w-[150px] bg-yellow-50 border-yellow-300" value={(order as any).shippingNote || ""} onChange={(e) => handleFieldEdit(idx, "shippingNote", e.target.value)} placeholder="发货备注（规格、托数等）" />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-between mt-4">
+                    <span className="text-sm text-muted-foreground">
+                      请检查识别结果，修正黄色/橙色高亮字段后提交
+                    </span>
+                    <Button
+                      onClick={handleBatchSubmitClick}
+                      disabled={isSubmitting || submitted || parsedOrders.length === 0}
+                    >
+                      {isSubmitting ? (
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                      ) : submitted ? (
+                        <Check className="h-4 w-4 mr-1" />
+                      ) : (
+                        <Save className="h-4 w-4 mr-1" />
+                      )}
+                      {isSubmitting ? "提交中..." : submitted ? "已提交" : `批量创建 ${parsedOrders.length} 条订单`}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+              </>
+            )}
+          </TabsContent>
+        </Tabs>
+      </div>
+
+      {/* 大板强制确认弹窗 */}
+      <Dialog open={largeSlabDialog} onOpenChange={setLargeSlabDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-purple-700">
+              <Package className="h-5 w-5" />
+              检测到大板货物
+            </DialogTitle>
+            <DialogDescription>
+              系统检测到该订单可能为大板货物，请确认：
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            {largeSlabDetection.keywords.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">检测到关键词：</span>
+                {largeSlabDetection.keywords.map((kw, i) => (
+                  <Badge key={i} className="bg-purple-100 text-purple-700">{kw}</Badge>
+                ))}
+              </div>
+            )}
+            {largeSlabDetection.specs.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">检测到大板规格：</span>
+                {largeSlabDetection.specs.map((spec, i) => (
+                  <Badge key={i} className="bg-orange-100 text-orange-700">{spec}</Badge>
+                ))}
+              </div>
+            )}
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm">
+              <p className="font-medium text-purple-800 mb-1">大板订单需要额外信息：</p>
+              <ul className="text-purple-700 space-y-1 text-xs">
+                <li>• 整车大板：需填写<strong>计费重量</strong>（客户给的包车重量，如32吨）</li>
+                <li>• 零担大板：需填写<strong>架数</strong>（如3架）</li>
+              </ul>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={handleDenyLargeSlab}>
+              不是大板，直接提交
+            </Button>
+            <Button className="bg-purple-600 hover:bg-purple-700" onClick={handleConfirmLargeSlab}>
+              <Package className="h-4 w-4 mr-1" />
+              确认是大板
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 加急确认弹窗 - 提交前强制确认 */}
+      <AlertDialog open={pendingRemoveUid !== null} onOpenChange={(open) => { if (!open) setPendingRemoveUid(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除该条录单内容？</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后该条智能粘贴识别结果将从当前提交列表移除，且不会自动恢复。请确认该行不再需要后再继续。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingRemoveUid(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingRemoveUid) {
+                  handleRemoveOrder(pendingRemoveUid);
+                }
+              }}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={urgentConfirmOpen} onOpenChange={setUrgentConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-lg">
+              <AlertTriangle className="h-5 w-5 text-amber-600" />
+              提交前确认
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p className="text-base font-medium text-gray-900">
+                  请确认本批 {parsedOrders.length} 条订单的加急状态：
+                </p>
+                {parsedOrders.some(o => o.isUrgent) ? (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Badge variant="destructive" className="animate-pulse">加急</Badge>
+                      <span className="font-medium text-red-800">本批订单已标记为加急</span>
+                    </div>
+                    <p className="text-sm text-red-700">加急理由：{parsedOrders[0]?.urgentReason || "未填写"}</p>
+                  </div>
+                ) : (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="bg-green-100 text-green-700 border-green-300">普通</Badge>
+                      <span className="font-medium text-green-800">本批订单为普通订单（非加急）</span>
+                    </div>
+                  </div>
+                )}
+                <p className="text-sm text-muted-foreground">如需修改加急状态，请点击“返回修改”</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>返回修改</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setUrgentConfirmOpen(false); handleBatchSubmit(); }}>
+              确认提交
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </DashboardLayout>
+  );
+}

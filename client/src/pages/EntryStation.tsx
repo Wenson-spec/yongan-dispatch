@@ -1,0 +1,1997 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { fmtDate, fmtShort } from "@/lib/dateUtils";
+import {
+  PROGRESS_STAGE_LABELS,
+  buildEntryStationTotalPlanMeta,
+  getOrderOwnerLabel,
+  getOrderWorkbenchMeta,
+  isEntryStationTotalPlanGrouped,
+  isEntryStationTotalPlanLead,
+  summarizeTotalOrders,
+  sortEntryStationTotalOrders,
+} from "./entryStationTotalTable.utils";
+import { trpc } from "@/lib/trpc";
+import DashboardLayout from "@/components/DashboardLayout";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import InlineEdit from "@/components/InlineEdit";
+import MergedPlanGroupHeader from "@/components/MergedPlanGroupHeader";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  ClipboardList,
+  Clock,
+  Download,
+  FileSpreadsheet,
+  Layers,
+  LayoutDashboard,
+  List,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Trash2,
+  Truck,
+  UserPlus,
+  Workflow,
+} from "lucide-react";
+import { toast } from "sonner";
+import { useLocation } from "wouter";
+import { useMergedPlanGroups } from "@/hooks/useMergedPlanGroups";
+import { TablePagination } from "@/components/TablePagination";
+import { usePermissions } from "@/hooks/usePermissions";
+import {
+  getMergedChildBusinessTypeLockReason,
+  getMergedChildDeleteLockReason,
+} from "@/lib/commandGroupRules";
+
+const STATUS_LABELS: Record<string, string> = {
+  pending_assign: "待指派",
+  pending_price: "待定价",
+  pending_dispatch: "待调度",
+  pending_vehicle: "待找车",
+  pending_approval: "待审批",
+  pending_inquiry: "待询价",
+  inquiry_confirmed: "已询价",
+  shipped: "已发运",
+  priced: "已定价",
+  dispatched: "已调度",
+  in_transit: "运输中",
+  delivered: "已送达",
+  signed: "已签收",
+  settled: "已结算",
+  on_hold: "等通知",
+  cancelled: "已取消",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  pending_assign: "bg-red-100 text-red-700",
+  pending_price: "bg-orange-100 text-orange-700",
+  pending_dispatch: "bg-amber-100 text-amber-700",
+  pending_vehicle: "bg-blue-100 text-blue-700",
+  pending_approval: "bg-purple-100 text-purple-700",
+  pending_inquiry: "bg-cyan-100 text-cyan-700",
+  inquiry_confirmed: "bg-teal-100 text-teal-700",
+  shipped: "bg-sky-100 text-sky-700",
+  priced: "bg-indigo-100 text-indigo-700",
+  dispatched: "bg-blue-100 text-blue-700",
+  in_transit: "bg-green-100 text-green-700",
+  delivered: "bg-emerald-100 text-emerald-700",
+  signed: "bg-green-200 text-green-800",
+  settled: "bg-green-200 text-green-800",
+  on_hold: "bg-amber-100 text-amber-700",
+  cancelled: "bg-gray-200 text-gray-500",
+};
+
+const BIZ_LABELS: Record<string, string> = {
+  outsource: "外请",
+  self: "自运",
+  ltl: "零担",
+};
+
+const BIZ_BADGES: Record<string, string> = {
+  outsource: "border-blue-200 bg-blue-50 text-blue-700",
+  self: "border-green-200 bg-green-50 text-green-700",
+  ltl: "border-purple-200 bg-purple-50 text-purple-700",
+};
+
+const BUSINESS_TYPE_EDITABLE_STATUSES = [
+  "pending_assign",
+  "pending_price",
+  "priced",
+  "pending_dispatch",
+  "pending_vehicle",
+  "pending_inquiry",
+  "on_hold",
+];
+
+function getRouteTargetStatus(businessType?: string) {
+  if (businessType === "self") return "pending_dispatch";
+  if (businessType === "ltl") return "pending_inquiry";
+  return "pending_price";
+}
+
+function getRouteTargetLabel(businessType?: string) {
+  if (businessType === "self") return "自运待调度";
+  if (businessType === "ltl") return "零担待询价";
+  return "外请待定价";
+}
+
+function getQueueBadge(view: "pool" | "returned") {
+  return view === "returned" ? "退回待处理" : "待分流";
+}
+
+export default function EntryStation() {
+  const [, setLocation] = useLocation();
+  const { hasPermission } = usePermissions();
+  const utils = trpc.useUtils();
+
+  const [activeTab, setActiveTab] = useState("orders");
+  const [queueView, setQueueView] = useState<"pool" | "returned">("pool");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+  const [groupByPlan, setGroupByPlan] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const [tmsExportType, setTmsExportType] = useState<"full" | "outsource" | "self" | "ltl">("full");
+  const [tmsStartDate, setTmsStartDate] = useState("");
+  const [tmsEndDate, setTmsEndDate] = useState("");
+  const [tmsCustomerId, setTmsCustomerId] = useState<string>("");
+
+  const [bizSwitchConfirm, setBizSwitchConfirm] = useState<{
+    orderId: number;
+    orderNumber: string;
+    from: string;
+    to: string;
+  } | null>(null);
+  const [assignDialog, setAssignDialog] = useState<any>(null);
+  const [selectedDispatcherId, setSelectedDispatcherId] = useState("");
+  const [isBatchRouting, setIsBatchRouting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+
+  const [totalPage, setTotalPage] = useState(1);
+  const [totalPageSize, setTotalPageSize] = useState(100);
+  const [totalKeyword, setTotalKeyword] = useState("");
+  const [totalBusinessType, setTotalBusinessType] = useState("all");
+  const [totalStatus, setTotalStatus] = useState("all");
+  const [totalCustomerId, setTotalCustomerId] = useState("all");
+  const [totalDispatcherId, setTotalDispatcherId] = useState("all");
+  const [totalStartDate, setTotalStartDate] = useState("");
+  const [totalEndDate, setTotalEndDate] = useState("");
+
+  const tmsQueryInput = useMemo(
+    () => ({
+      exportType: tmsExportType,
+      startDate: tmsStartDate || undefined,
+      endDate: tmsEndDate || undefined,
+      customerId: tmsCustomerId && tmsCustomerId !== "all" ? parseInt(tmsCustomerId) : undefined,
+    }),
+    [tmsExportType, tmsStartDate, tmsEndDate, tmsCustomerId],
+  );
+
+  const { data: tmsData, isLoading: tmsLoading } = trpc.smartPaste.tmsExport.useQuery(tmsQueryInput);
+  const { data: customers } = trpc.customer.list.useQuery({ activeOnly: true });
+  const { data: dispatcherList } = trpc.order.getDispatchers.useQuery(undefined, {
+    enabled: ["orders", "total"].includes(activeTab) && hasPermission("order.assign"),
+  });
+
+  const queryInput = useMemo(
+    () => ({
+      page,
+      pageSize,
+      keyword: search || undefined,
+      view: queueView,
+    }),
+    [page, pageSize, search, queueView],
+  );
+
+  const { data, isLoading, refetch } = trpc.order.listEntryQueue.useQuery(queryInput, {
+    refetchInterval: 15000,
+  });
+
+  const totalQueryInput = useMemo(
+    () => ({
+      page: totalPage,
+      pageSize: totalPageSize,
+      keyword: totalKeyword || undefined,
+      businessType: totalBusinessType !== "all" ? (totalBusinessType as "outsource" | "self" | "ltl") : undefined,
+      status: totalStatus !== "all" ? totalStatus : undefined,
+      customerId: totalCustomerId !== "all" ? parseInt(totalCustomerId, 10) : undefined,
+      assignedDispatcherId: totalDispatcherId !== "all" ? parseInt(totalDispatcherId, 10) : undefined,
+      startDate: totalStartDate || undefined,
+      endDate: totalEndDate || undefined,
+      viewScope: "entry_total" as const,
+    }),
+    [
+      totalBusinessType,
+      totalCustomerId,
+      totalDispatcherId,
+      totalEndDate,
+      totalKeyword,
+      totalPage,
+      totalPageSize,
+      totalStartDate,
+      totalStatus,
+    ],
+  );
+
+  const {
+    data: totalData,
+    isLoading: totalLoading,
+    refetch: refetchTotal,
+  } = trpc.order.list.useQuery(totalQueryInput, {
+    enabled: activeTab === "total",
+    refetchInterval: activeTab === "total" ? 15000 : false,
+  });
+
+  const updateFields = trpc.order.updateOrderFields.useMutation({
+    onSuccess: async () => {
+      await refetch();
+      toast.success("订单资料已更新，仍保留在录单台待处理队列");
+    },
+    onError: (err: any) => toast.error(err.message || "更新失败"),
+  });
+
+  const updateStatus = trpc.order.updateStatus.useMutation({
+    onSuccess: async () => {
+      setSelectedIds(new Set());
+      await refetch();
+      toast.success("订单已成功分流到对应工位");
+    },
+    onError: (err: any) => toast.error(err.message || "分流失败"),
+  });
+
+  const batchUpdateStatus = trpc.order.batchUpdateStatus.useMutation();
+
+  const manualAssign = trpc.order.manualAssign.useMutation({
+    onSuccess: async () => {
+      setAssignDialog(null);
+      setSelectedDispatcherId("");
+      await refetch();
+      toast.success("已重新指派外请调度员，订单进入待找车队列");
+    },
+    onError: (err: any) => toast.error(err.message || "重新指派失败"),
+  });
+
+  const batchManualAssign = trpc.order.batchManualAssign.useMutation({
+    onSuccess: async (res) => {
+      setAssignDialog(null);
+      setSelectedDispatcherId("");
+      await Promise.all([
+        utils.order.listEntryQueue.invalidate(),
+        utils.order.list.invalidate(),
+        utils.order.stats.invalidate(),
+      ]);
+      await refetch();
+      toast.success(`已按主单重新指派，${res.count} 个组合订单子单已自动跟随进入待找车队列`);
+    },
+    onError: (err: any) => toast.error(err.message || "整组重新指派失败"),
+  });
+
+  const deleteMutation = trpc.order.delete.useMutation({
+    onSuccess: async () => {
+      setDeleteTarget(null);
+      setSelectedIds(new Set());
+      await Promise.all([
+        utils.order.listEntryQueue.invalidate(),
+        utils.order.list.invalidate(),
+        utils.order.stats.invalidate(),
+      ]);
+      await refetch();
+      toast.success("订单已删除");
+    },
+    onError: (err: any) => toast.error(err.message || "删除失败"),
+  });
+
+  const batchDeleteMutation = trpc.order.batchDelete.useMutation({
+    onSuccess: async (res) => {
+      setBatchDeleteOpen(false);
+      setSelectedIds(new Set());
+      await Promise.all([
+        utils.order.listEntryQueue.invalidate(),
+        utils.order.list.invalidate(),
+        utils.order.stats.invalidate(),
+      ]);
+      await refetch();
+      toast.success(`已批量删除 ${res.count} 个订单`);
+    },
+    onError: (err: any) => toast.error(err.message || "批量删除失败"),
+  });
+
+  const orders = data?.items ?? [];
+  const totalOrders = useMemo(
+    () => sortEntryStationTotalOrders(totalData?.items ?? []),
+    [totalData?.items],
+  );
+  const totalPlanMeta = useMemo(() => buildEntryStationTotalPlanMeta(totalOrders), [totalOrders]);
+  const totalSummary = useMemo(() => {
+    return {
+      total: totalData?.total ?? 0,
+      ...summarizeTotalOrders(totalOrders),
+    };
+  }, [totalData?.total, totalOrders]);
+  const queuePlanMeta = useMemo(() => buildEntryStationTotalPlanMeta(orders), [orders]);
+  const { groupedData, hasGroups, expandedGroups, toggleGroup, expandAll, collapseAll } = useMergedPlanGroups(orders, groupByPlan);
+  const {
+    groupedData: totalGroupedData,
+    hasGroups: totalHasGroups,
+    expandedGroups: totalExpandedGroups,
+    toggleGroup: toggleTotalGroup,
+    expandAll: expandAllTotal,
+    collapseAll: collapseAllTotal,
+  } = useMergedPlanGroups(totalOrders, groupByPlan);
+
+  const outsourceDispatchers = useMemo(
+    () => (dispatcherList ?? []).filter((item: any) => item.role === "outsource_dispatcher"),
+    [dispatcherList],
+  );
+
+  const selectedOrders = useMemo(
+    () => orders.filter((order: any) => selectedIds.has(order.id)),
+    [orders, selectedIds],
+  );
+
+  const allVisibleOrderIds = useMemo(
+    () => orders.map((order: any) => order.id),
+    [orders],
+  );
+
+  const todayStats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayItems = orders.filter((item: any) => new Date(item.createdAt) >= today);
+    return {
+      total: todayItems.length,
+      outsource: todayItems.filter((item: any) => item.businessType === "outsource").length,
+      self: todayItems.filter((item: any) => item.businessType === "self").length,
+      ltl: todayItems.filter((item: any) => item.businessType === "ltl").length,
+      returned: todayItems.filter((item: any) => item.lastReturnAt).length,
+    };
+  }, [orders]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, pageSize, queueView, search]);
+
+  useEffect(() => {
+    if (activeTab !== "orders") {
+      setSelectedIds(new Set());
+    }
+  }, [activeTab]);
+
+  const getBusinessTypeLockReason = (order: any) => {
+    if (!BUSINESS_TYPE_EDITABLE_STATUSES.includes(order?.status || "")) {
+      return "订单已进入执行流程，请先退回到初始阶段后再修改业务类型。";
+    }
+    return getMergedChildBusinessTypeLockReason(order);
+  };
+
+  const getDeleteLockReason = (order: any) => getMergedChildDeleteLockReason(order);
+
+  const isGroupedChildLike = (
+    order: any,
+    planMeta: { groupSizes: Map<string, number>; leadIds: Map<string, any> },
+  ) => {
+    const planKey = String(order?.mergedPlanNumber || "").trim();
+    if (!planKey) return false;
+    const planSize = planMeta.groupSizes.get(planKey) ?? 0;
+    if (planSize <= 1) return false;
+    return planMeta.leadIds.get(planKey) !== (order.id ?? null);
+  };
+
+  const getFollowOnlyHint = (scene: "queue" | "total" = "queue") => {
+    return scene === "total"
+      ? "子单仅作明细展示，请在主单统一进入对应工位处理。"
+      : "子单仅随主单整组处理，不支持单独分流、重新指派、删除或编辑。";
+  };
+
+  const isQueueFollowOnlyOrder = (order: any) => isGroupedChildLike(order, queuePlanMeta);
+  const isTotalFollowOnlyOrder = (order: any) => isGroupedChildLike(order, totalPlanMeta);
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = (checked: boolean) => {
+    setSelectedIds(checked ? new Set(allVisibleOrderIds) : new Set());
+  };
+
+  const toggleSelectGroup = (orderIds: number[], checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      orderIds.forEach((id) => {
+        if (checked) next.add(id);
+        else next.delete(id);
+      });
+      return next;
+    });
+  };
+
+  const routeOrdersByBusinessType = async (targetOrders: any[]) => {
+    if (targetOrders.length === 0) {
+      toast.error("请先选择需要处理的订单");
+      return;
+    }
+
+    const groups = targetOrders.reduce<Record<string, number[]>>((acc, order: any) => {
+      const status = getRouteTargetStatus(order.businessType);
+      if (!acc[status]) acc[status] = [];
+      acc[status].push(order.id);
+      return acc;
+    }, {});
+
+    setIsBatchRouting(true);
+    try {
+      for (const [status, orderIds] of Object.entries(groups)) {
+        await batchUpdateStatus.mutateAsync({ orderIds, status });
+      }
+      setSelectedIds(new Set());
+      await Promise.all([
+        utils.order.listEntryQueue.invalidate(),
+        utils.order.list.invalidate(),
+        utils.order.stats.invalidate(),
+      ]);
+      await refetch();
+      toast.success(`已按当前业务类型批量${queueView === "returned" ? "重新分流" : "分流"} ${targetOrders.length} 个订单`);
+    } catch (err: any) {
+      toast.error(err.message || "批量分流失败");
+    } finally {
+      setIsBatchRouting(false);
+    }
+  };
+
+  const handleRouteOrder = (order: any, relatedOrders?: any[]) => {
+    const targetOrders = relatedOrders && relatedOrders.length > 0 ? relatedOrders : [order];
+    if (targetOrders.length > 1) {
+      void routeOrdersByBusinessType(targetOrders);
+      return;
+    }
+
+    updateStatus.mutate({
+      id: order.id,
+      status: getRouteTargetStatus(order.businessType),
+    });
+  };
+
+  const handleBatchRoute = async () => {
+    await routeOrdersByBusinessType(selectedOrders);
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedOrders.length === 0) {
+      toast.error("请先选择需要删除的订单");
+      return;
+    }
+    setBatchDeleteOpen(true);
+  };
+
+  const handleExportTMS = () => {
+    if (!tmsData || !tmsData.rows.length) {
+      toast.error("没有数据可导出");
+      return;
+    }
+    const BOM = "\uFEFF";
+    const header = tmsData.columns.join(",");
+    const rows = tmsData.rows.map((row: any[]) =>
+      row
+        .map((cell: any) => {
+          const str = cell === null || cell === undefined || cell === "null" ? "" : String(cell);
+          if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+            return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+        })
+        .join(","),
+    );
+    const csv = BOM + header + "\n" + rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const typeLabels: Record<string, string> = {
+      full: "全量",
+      outsource: "外请表",
+      self: "小车表",
+      ltl: "零担表",
+    };
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    a.download = `TMS_${typeLabels[tmsExportType]}_${dateStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`已导出 ${tmsData.total} 条数据（TMS 34列格式）`);
+  };
+
+  const renderBusinessTypeCell = (order: any) => {
+    const businessTypeLockReason = getBusinessTypeLockReason(order);
+    const canEditBusinessType = !businessTypeLockReason;
+
+    if (!canEditBusinessType) {
+      return (
+        <div className="space-y-1">
+          <Badge variant="outline" className="h-6 px-1.5 text-[10px] bg-muted/40 border-dashed">
+            {BIZ_LABELS[order.businessType] || order.businessType}
+          </Badge>
+          <p className="max-w-[180px] text-[10px] leading-4 text-muted-foreground">
+            {businessTypeLockReason}
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <Select
+        value={order.businessType}
+        onValueChange={(val) => {
+          if (val !== order.businessType) {
+            setBizSwitchConfirm({
+              orderId: order.id,
+              orderNumber: order.orderNumber || order.systemCode,
+              from: order.businessType,
+              to: val,
+            });
+          }
+        }}
+      >
+        <SelectTrigger className="h-7 w-[84px] text-[11px] px-2 py-0 border-dashed">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="outsource">外请</SelectItem>
+          <SelectItem value="self">自运</SelectItem>
+          <SelectItem value="ltl">零担</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  };
+
+  const renderReturnInfo = (order: any) => {
+    if (!order.lastReturnAt) {
+      return <span className="text-xs text-muted-foreground">首次录入，未发生退回</span>;
+    }
+
+    return (
+      <div className="space-y-1.5 text-xs leading-5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge className="bg-amber-100 text-amber-700">退回待处理</Badge>
+          {order.lastReturnFromLabel ? (
+            <span className="text-muted-foreground">来自：{order.lastReturnFromLabel}</span>
+          ) : null}
+        </div>
+        <div className="text-muted-foreground">
+          {order.lastReturnBy || "系统"} · {fmtShort(order.lastReturnAt)}
+        </div>
+        <div className="max-w-[320px] text-foreground/80 text-wrap-keep-linebreaks table-text-compact leading-5">
+          {order.lastReturnReason || order.lastReturnDescription || "未填写退回原因"}
+        </div>
+      </div>
+    );
+  };
+
+  const renderActionCell = (order: any) => {
+    const deleteLockReason = getDeleteLockReason(order);
+    const isFollowOnlyOrder = isQueueFollowOnlyOrder(order);
+
+    if (isFollowOnlyOrder) {
+      return (
+        <div className="flex justify-end">
+          <div className="max-w-[280px] text-right text-[11px] leading-5 text-muted-foreground text-wrap-safe">
+            {getFollowOnlyHint("queue")}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <Button
+          size="sm"
+          className="h-8 px-2.5"
+          onClick={() => handleRouteOrder(order)}
+          disabled={updateStatus.isPending}
+        >
+          <Workflow className="mr-1 h-3.5 w-3.5" />
+          分流到{getRouteTargetLabel(order.businessType)}
+        </Button>
+        {queueView === "returned" && hasPermission("order.assign") && order.businessType === "outsource" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2.5 text-blue-700 border-blue-200 hover:bg-blue-50"
+            onClick={() => {
+              setAssignDialog(order);
+              setSelectedDispatcherId("");
+            }}
+          >
+            <UserPlus className="mr-1 h-3.5 w-3.5" />
+            重新指派
+          </Button>
+        ) : null}
+        {hasPermission("order.delete") ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2.5 border-red-200 text-red-600 hover:bg-red-50 disabled:border-muted disabled:text-muted-foreground"
+            onClick={() => {
+              if (deleteLockReason) {
+                toast.error(deleteLockReason);
+                return;
+              }
+              setDeleteTarget(order);
+            }}
+            disabled={Boolean(deleteLockReason) || deleteMutation.isPending || batchDeleteMutation.isPending}
+            title={deleteLockReason || undefined}
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" />
+            删除
+          </Button>
+        ) : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setLocation(`/orders/edit/${order.id}?from=/station/entry`)}>
+              编辑修正
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setLocation(`/orders/edit/${order.id}?from=/station/entry&view=detail`)}>
+              查看详情
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
+
+  const renderOrderRow = (order: any, isChild: boolean) => {
+    const routeLabel = getRouteTargetLabel(order.businessType);
+    const isReturned = Boolean(order.lastReturnAt);
+    const isFollowOnlyOrder = isChild || isQueueFollowOnlyOrder(order);
+
+    return (
+      <TableRow
+        key={order.id}
+        className={[
+          order.isUrgent ? "bg-red-50/40" : "",
+          isFollowOnlyOrder ? "bg-blue-50/20 border-l-2 border-l-blue-200" : "",
+          isReturned ? "bg-amber-50/40" : "",
+        ].join(" ")}
+      >
+        <TableCell className="w-[44px]" onClick={(e) => e.stopPropagation()}>
+          {isFollowOnlyOrder ? (
+            <span className="block text-center text-xs text-muted-foreground">跟随</span>
+          ) : (
+            <Checkbox checked={selectedIds.has(order.id)} onCheckedChange={() => toggleSelect(order.id)} />
+          )}
+        </TableCell>
+        <TableCell className="font-mono text-xs">
+          <div className="flex items-center gap-1">
+            {isFollowOnlyOrder ? <span className="pl-2 text-muted-foreground">└</span> : null}
+            {order.isUrgent ? <AlertTriangle className="h-3.5 w-3.5 text-red-500" /> : null}
+            <span>{order.orderNumber || order.systemCode}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className={BIZ_BADGES[order.businessType] || ""}>
+              {BIZ_LABELS[order.businessType] || order.businessType}
+            </Badge>
+            <Badge className={STATUS_COLORS[order.status] || "bg-gray-100 text-gray-700"}>
+              {STATUS_LABELS[order.status] || order.status}
+            </Badge>
+            <Badge variant="outline" className="text-[10px]">
+              {routeLabel}
+            </Badge>
+            {isFollowOnlyOrder ? (
+              <Badge variant="outline" className="border-blue-200 bg-blue-50 text-[10px] text-blue-700">
+                子单跟随主单
+              </Badge>
+            ) : null}
+          </div>
+        </TableCell>
+        <TableCell>
+          {isFollowOnlyOrder ? (
+            <div className="space-y-1">
+              <Badge variant="outline" className="h-6 border-dashed bg-muted/40 px-1.5 text-[10px]">
+                {BIZ_LABELS[order.businessType] || order.businessType}
+              </Badge>
+              <p className="max-w-[220px] text-[10px] leading-4 text-muted-foreground text-wrap-safe">子单业务类型随主单统一调整。</p>
+            </div>
+          ) : (
+            renderBusinessTypeCell(order)
+          )}
+        </TableCell>
+        <TableCell>
+          <div className="text-sm font-medium">{order.customerName || "-"}</div>
+          <div className="text-xs text-muted-foreground">{order.cargoName || "-"}</div>
+          {(order.isLargeSlab || order.cargoSpec || order.chargeableWeight || order.packageCount || order.palletCount || order.specialRequirements || order.largeSlabShippingRequired) ? (
+            <div className="mt-2 space-y-1.5">
+              <div className="flex flex-wrap gap-1.5">
+                {order.isLargeSlab ? (
+                  <Badge variant="outline" className="border-amber-300 bg-amber-50 text-[10px] text-amber-700">
+                    大板
+                  </Badge>
+                ) : null}
+                {order.largeSlabShippingRequired ? (
+                  <Badge variant="outline" className="border-orange-300 bg-orange-50 text-[10px] text-orange-700">
+                    按大板发货要求执行
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="space-y-1 text-[11px] leading-4 text-muted-foreground">
+                {order.cargoSpec ? <div>规格：{order.cargoSpec}</div> : null}
+                {(order.packageCount || order.palletCount) ? (
+                  <div>
+                    数量：
+                    {order.palletCount ? `${order.palletCount} 托` : "-"}
+                    {order.packageCount ? ` / ${order.packageCount} 架` : ""}
+                  </div>
+                ) : null}
+                {order.chargeableWeight ? <div>计费重量：{order.chargeableWeight}t</div> : null}
+                {order.specialRequirements ? <div className="text-orange-600">特殊要求：{order.specialRequirements}</div> : null}
+              </div>
+            </div>
+          ) : null}
+        </TableCell>
+        <TableCell>
+          <div className="flex items-center gap-1 text-xs">
+            {order.originCity || "?"}
+            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+            {order.destinationCity || "?"}
+          </div>
+          <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+            <div>实际重量：{order.weight ? `${order.weight}t` : "-"}</div>
+            {order.chargeableWeight ? <div>计费重量：{order.chargeableWeight}t</div> : null}
+          </div>
+        </TableCell>
+        <TableCell>
+          <div className="max-w-[240px] space-y-2 text-xs text-muted-foreground">
+            {(order.cargoSpec || order.packageCount || order.palletCount || order.largeSlabShippingRequired || order.specialRequirements || order.chargeableWeight) ? (
+              <div className="rounded-md border border-dashed border-amber-200 bg-amber-50/40 px-2.5 py-2 leading-5">
+                {order.cargoSpec ? <div>规格：{order.cargoSpec}</div> : null}
+                {(order.palletCount || order.packageCount) ? <div>托/架数：{order.palletCount || 0} 托 / {order.packageCount || 0} 架</div> : null}
+                {order.chargeableWeight ? <div>计费重量：{order.chargeableWeight}t</div> : null}
+                {order.largeSlabShippingRequired ? <div>发货要求：按大板发货要求执行</div> : null}
+                {order.specialRequirements ? <div className="text-orange-600">特殊要求：{order.specialRequirements}</div> : null}
+              </div>
+            ) : null}
+            {isFollowOnlyOrder ? (
+              <div className="text-wrap-keep-linebreaks">
+                {(order as any).shippingNote || order.remarks || "子单随主单统一修正"}
+              </div>
+            ) : (
+              <InlineEdit
+                value={(order as any).shippingNote || order.remarks || ""}
+                placeholder="点击补充兜底说明"
+                onSave={(val) => updateFields.mutate({ id: order.id, shippingNote: val })}
+                className="text-wrap-safe table-text-compact"
+              />
+            )}
+          </div>
+        </TableCell>
+        <TableCell>{renderReturnInfo(order)}</TableCell>
+        <TableCell className="text-xs text-muted-foreground">
+          <div>{order.orderDate ? fmtDate(order.orderDate) : "-"}</div>
+          <div className="mt-1">录入：{fmtShort(order.createdAt)}</div>
+        </TableCell>
+        <TableCell className="min-w-[240px]">{renderActionCell(order)}</TableCell>
+      </TableRow>
+    );
+  };
+
+  const renderOrderTable = () => {
+    const colSpan = 8;
+
+    return (
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[44px]">
+                  <Checkbox
+                    checked={allVisibleOrderIds.length > 0 && selectedIds.size === allVisibleOrderIds.length}
+                    onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
+                  />
+                </TableHead>
+                <TableHead className="w-[180px]">客户订单号</TableHead>
+                <TableHead className="w-[110px]">分流类型</TableHead>
+                <TableHead>客户 · 货物</TableHead>
+                <TableHead className="w-[180px]">路线 · 吨位</TableHead>
+                <TableHead className="w-[200px]">录单修正</TableHead>
+                <TableHead className="w-[260px]">{queueView === "returned" ? "退回处理信息" : "当前队列说明"}</TableHead>
+                <TableHead className="w-[140px]">时间</TableHead>
+                <TableHead className="w-[260px] text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={colSpan + 1} className="py-10 text-center text-muted-foreground">
+                    加载中...
+                  </TableCell>
+                </TableRow>
+              ) : orders.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={colSpan + 1} className="py-10 text-center text-muted-foreground">
+                    {queueView === "returned" ? "暂无退回待处理订单" : "暂无待分流订单"}
+                  </TableCell>
+                </TableRow>
+              ) : groupByPlan && groupedData ? (
+                <>
+                  {Array.from(groupedData.groups.entries()).map(([planNumber, groupOrders]) => {
+                    const isExpanded = expandedGroups.has(planNumber);
+                    const totalWeight = groupOrders.reduce((sum, item: any) => sum + parseFloat(item.weight || "0"), 0);
+                    const destinations = Array.from(new Set(groupOrders.map((item: any) => item.destinationCity).filter(Boolean)));
+                    const groupIds = groupOrders.map((item: any) => item.id);
+                    const selectedCount = groupIds.filter((id: number) => selectedIds.has(id)).length;
+                    const allSelected = selectedCount === groupIds.length && groupIds.length > 0;
+                    const statusCounts: Record<string, number> = {};
+                    const latestQueueTime = groupOrders.reduce((latest: string | null, item: any) => {
+                      const current = queueView === "returned" ? (item.lastReturnAt || item.updatedAt || item.createdAt) : (item.updatedAt || item.createdAt);
+                      if (!current) return latest;
+                      if (!latest) return current;
+                      return new Date(current).getTime() > new Date(latest).getTime() ? current : latest;
+                    }, null);
+                    groupOrders.forEach((item: any) => {
+                      statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
+                    });
+
+                    return (
+                      <React.Fragment key={planNumber}>
+                        <MergedPlanGroupHeader
+                          groupKey={planNumber}
+                          groupLabel={planNumber}
+                          groupTypeLabel="组合标识"
+                          groupModeLabel={queueView === "returned" ? "录单退回闭环" : "录单待分流"}
+                          orders={groupOrders}
+                          isExpanded={isExpanded}
+                          onToggle={() => toggleGroup(planNumber)}
+                          totalColumns={colSpan + 1}
+                          leadingCellCount={1}
+                          leadingCells={(
+                            <TableCell onClick={(e) => e.stopPropagation()}>
+                              <Checkbox
+                                checked={allSelected}
+                                onCheckedChange={(checked) => toggleSelectGroup(groupIds, Boolean(checked))}
+                              />
+                            </TableCell>
+                          )}
+                          keyTimeLabel={queueView === "returned" ? "最近退回" : "最近变更"}
+                          keyTimeValue={latestQueueTime ? fmtShort(latestQueueTime) : "-"}
+                          summaryFields={[
+                            { label: "主单号", value: groupOrders[0]?.orderNumber || "-" },
+                            { label: "子单数", value: `${groupOrders.length} 单` },
+                            {
+                              label: "加急统计",
+                              value: groupOrders.every((item: any) => item.isUrgent)
+                                ? "全组加急"
+                                : groupOrders.some((item: any) => item.isUrgent)
+                                  ? `含加急 ${groupOrders.filter((item: any) => item.isUrgent).length} 单`
+                                  : "普通优先级",
+                              className: groupOrders.some((item: any) => item.isUrgent) ? "text-red-700" : undefined,
+                            },
+                            {
+                              label: "目的地统计",
+                              value: destinations.length <= 2 ? (destinations.join("、") || "-") : `${destinations[0]}等${destinations.length}地`,
+                            },
+                            { label: "总重量", value: `${totalWeight.toFixed(3)}t`, emphasize: true },
+                            {
+                              label: "当前阶段",
+                              value: (
+                                <div className="flex flex-wrap gap-1">
+                                  {Object.entries(statusCounts).map(([status, count]) => (
+                                    <Badge key={status} className={STATUS_COLORS[status] || "bg-gray-100 text-gray-700"}>
+                                      {STATUS_LABELS[status] || status}
+                                      {count > 1 ? `×${count}` : ""}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ),
+                            },
+                            {
+                              label: queueView === "returned" ? "关键时间" : "当前队列",
+                              value: queueView === "returned" ? (latestQueueTime ? fmtShort(latestQueueTime) : "-") : "待录单分流处理",
+                            },
+                          ]}
+                          subtitle={
+                            <div className="space-y-1">
+                              <div>
+                                {groupOrders[0]?.originCity || "-"} → {destinations.length <= 2 ? destinations.join("、") : `${destinations[0]} 等 ${destinations.length} 地`}
+                              </div>
+                              <div>客户：{groupOrders[0]?.customerName || "-"}；货物：{groupOrders[0]?.cargoName || "-"}</div>
+                            </div>
+                          }
+                          secondaryContent={(
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                              <div className="space-y-2 text-xs text-muted-foreground">
+                                <div className="rounded-md border border-dashed border-border/70 bg-muted/20 px-2.5 py-2 leading-5">
+                                  {groupOrders[0]?.shippingNote || groupOrders[0]?.remarks || "暂无队列补充说明"}
+                                </div>
+                                {selectedCount > 0 ? (
+                                  <Badge variant="outline" className="border-green-300 bg-green-50 text-[10px] text-green-700">
+                                    已选 {selectedCount} 单
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              <div className="text-xs text-muted-foreground">子单仅作明细展示</div>
+                            </div>
+                          )}
+                          mainAction={(
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <Button
+                                size="sm"
+                                className="h-8 px-2.5"
+                                onClick={() => handleRouteOrder(groupOrders[0], groupOrders)}
+                                disabled={isBatchRouting || batchUpdateStatus.isPending}
+                              >
+                                {isBatchRouting || batchUpdateStatus.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Workflow className="mr-1 h-3.5 w-3.5" />}
+                                {queueView === "returned" ? "整组重新分流" : "整组分流"}
+                              </Button>
+                              {queueView === "returned" && hasPermission("order.assign") && groupOrders[0]?.businessType === "outsource" ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 border-blue-200 px-2.5 text-blue-700 hover:bg-blue-50"
+                                  onClick={() => {
+                                    setAssignDialog({
+                                      ...groupOrders[0],
+                                      groupOrderIds: groupIds,
+                                      groupLabel: planNumber,
+                                      groupSize: groupOrders.length,
+                                    });
+                                    setSelectedDispatcherId("");
+                                  }}
+                                >
+                                  <UserPlus className="mr-1 h-3.5 w-3.5" />
+                                  整组重新指派
+                                </Button>
+                              ) : null}
+                            </div>
+                          )}
+                        />
+                        {isExpanded ? groupOrders.map((order: any) => renderOrderRow(order, true)) : null}
+                      </React.Fragment>
+                    );
+                  })}
+                  {groupedData.ungrouped.map((order: any) => renderOrderRow(order, false))}
+                </>
+              ) : (
+                orders.map((order: any) => renderOrderRow(order, false))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderTotalActionCell = (order: any) => {
+    if (isTotalFollowOnlyOrder(order)) {
+      return (
+        <div className="flex justify-end">
+          <div className="max-w-[280px] text-right text-[11px] leading-5 text-muted-foreground text-wrap-safe">
+            {getFollowOnlyHint("total")}
+          </div>
+        </div>
+      );
+    }
+
+    const target = getOrderWorkbenchMeta(order);
+
+    return (
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={() => setLocation(target.path)}>
+          前往{target.label}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setLocation(`/orders/edit/${order.id}?from=/station/entry&view=detail`)}>
+              查看详情
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setLocation(`/orders/edit/${order.id}?from=/station/entry`)}>
+              编辑订单
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
+
+  const renderTotalOrderRow = (order: any, isGroupedChild = false) => {
+    const target = getOrderWorkbenchMeta(order);
+    const planKey = String(order.mergedPlanNumber || "").trim();
+    const isPlanGrouped = isEntryStationTotalPlanGrouped(order, totalPlanMeta.groupSizes);
+    const isPlanLead = isEntryStationTotalPlanLead(order, totalPlanMeta.leadIds);
+    const planGroupSize = planKey ? (totalPlanMeta.groupSizes.get(planKey) ?? 0) : 0;
+    const isFollowOnlyOrder = isGroupedChild || isTotalFollowOnlyOrder(order);
+
+    return (
+      <TableRow
+        key={`total-${order.id}`}
+        className={[
+          order.isUrgent ? "border-l-4 border-l-red-500 bg-red-100/95 shadow-[inset_0_0_0_1px_rgba(239,68,68,0.22)]" : "",
+          isFollowOnlyOrder ? "bg-blue-50/20 border-l-2 border-l-blue-200" : "",
+          order.isMerged ? "shadow-[inset_0_0_0_1px_rgba(37,99,235,0.18)]" : "",
+          isPlanGrouped && isPlanLead && !isFollowOnlyOrder ? "bg-blue-50/55" : "",
+        ].filter(Boolean).join(" ")}
+      >
+        <TableCell className="font-mono text-xs">
+          <div className="flex items-center gap-1">
+            {isFollowOnlyOrder ? <span className="pl-2 text-muted-foreground">└</span> : null}
+            {order.isUrgent ? <AlertTriangle className="h-3.5 w-3.5 text-red-500" /> : null}
+            <span>{order.orderNumber || order.systemCode}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>系统号：{order.systemCode || "-"}</span>
+            {order.isUrgent ? (
+              <Badge className="border-red-300 bg-red-600 text-white hover:bg-red-600">加急</Badge>
+            ) : null}
+            {order.isMerged ? (
+              <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-700">合并主单</Badge>
+            ) : null}
+            {!order.isMerged && order.parentId ? (
+              <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-600">合并子单</Badge>
+            ) : null}
+            {!order.isMerged && !order.parentId && isPlanGrouped ? (
+              <Badge variant="outline" className={isPlanLead ? "border-blue-300 bg-blue-100 text-blue-700" : "border-blue-200 bg-blue-50 text-blue-600"}>
+                {isPlanLead ? `计划组头 · 共 ${planGroupSize} 单` : "计划分单"}
+              </Badge>
+            ) : null}
+            {isFollowOnlyOrder ? (
+              <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">子单跟随主单</Badge>
+            ) : null}
+            {order.mergedPlanNumber ? (
+              <Badge variant="outline" className="border-slate-300 bg-slate-50 text-slate-700">计划号：{order.mergedPlanNumber}</Badge>
+            ) : null}
+          </div>
+        </TableCell>
+        <TableCell>
+          <div className="text-sm font-medium">{order.customerName || "-"}</div>
+          <div className="text-xs text-muted-foreground">{order.cargoName || "-"}</div>
+        </TableCell>
+        <TableCell>
+          <div className="text-sm">{order.originCity || "-"} → {order.destinationCity || "-"}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{order.weight ? `${order.weight}t` : "-"}</div>
+        </TableCell>
+        <TableCell className="text-center">
+          <Badge variant="outline" className={BIZ_BADGES[order.businessType] || ""}>
+            {BIZ_LABELS[order.businessType] || order.businessType}
+          </Badge>
+        </TableCell>
+        <TableCell className="text-center">
+          <Badge className={STATUS_COLORS[order.status] || "bg-gray-100 text-gray-700"}>
+            {STATUS_LABELS[order.status] || order.status}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          <div className="space-y-1">
+            <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary">
+              {PROGRESS_STAGE_LABELS[order.status] || "处理中"}
+            </Badge>
+            <div className="text-[11px] text-muted-foreground">
+              {isFollowOnlyOrder ? "子单由主单统一带入下一工位" : `下一查看：${target.label}`}
+            </div>
+          </div>
+        </TableCell>
+        <TableCell>
+          <div className="text-sm font-medium">{getOrderOwnerLabel(order)}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{order.dispatcherName ? `责任人：${order.dispatcherName}` : "按当前状态自动归属"}</div>
+        </TableCell>
+        <TableCell className="text-xs text-muted-foreground">
+          <div>{order.orderDate ? fmtDate(order.orderDate) : "-"}</div>
+          <div className="mt-1">新建：{fmtShort(order.createdAt)}</div>
+          <div className="mt-1">更新：{fmtShort(order.updatedAt || order.createdAt)}</div>
+        </TableCell>
+        <TableCell>{renderTotalActionCell(order)}</TableCell>
+      </TableRow>
+    );
+  };
+
+  const renderTotalTable = () => {
+    return (
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[180px]">客户订单号</TableHead>
+                <TableHead>客户 · 货物</TableHead>
+                <TableHead className="w-[190px]">路线</TableHead>
+                <TableHead className="w-[92px] text-center">类型</TableHead>
+                <TableHead className="w-[110px] text-center">当前状态</TableHead>
+                <TableHead className="w-[140px]">当前进度</TableHead>
+                <TableHead className="w-[140px]">责任环节</TableHead>
+                <TableHead className="w-[150px]">最后更新时间</TableHead>
+                <TableHead className="w-[210px] text-right">快捷入口</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {totalLoading ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                    正在加载全部订单总表...
+                  </TableCell>
+                </TableRow>
+              ) : totalOrders.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                    当前筛选下暂无订单
+                  </TableCell>
+                </TableRow>
+              ) : groupByPlan && totalGroupedData ? (
+                <>
+                  {Array.from(totalGroupedData.groups.entries()).map(([planNumber, groupOrders]) => {
+                    const isExpanded = totalExpandedGroups.has(planNumber);
+                    const leadOrder = groupOrders[0];
+                    const totalWeight = groupOrders.reduce((sum, item: any) => sum + parseFloat(item.weight || "0"), 0);
+                    const destinations = Array.from(new Set(groupOrders.map((item: any) => item.destinationCity).filter(Boolean)));
+                    const businessTypes = Array.from(new Set(groupOrders.map((item: any) => BIZ_LABELS[item.businessType] || item.businessType).filter(Boolean)));
+                    const statusCounts: Record<string, number> = {};
+                    const latestTotalTime = groupOrders.reduce((latest: string | null, item: any) => {
+                      const current = item.updatedAt || item.createdAt || item.orderDate;
+                      if (!current) return latest;
+                      if (!latest) return current;
+                      return new Date(current).getTime() > new Date(latest).getTime() ? current : latest;
+                    }, null);
+                    groupOrders.forEach((item: any) => {
+                      statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
+                    });
+
+                    return (
+                      <React.Fragment key={`total-group-${planNumber}`}>
+                        <MergedPlanGroupHeader
+                          groupKey={planNumber}
+                          groupLabel={planNumber}
+                          groupTypeLabel="组合标识"
+                          groupModeLabel="录单总表联动"
+                          orders={groupOrders}
+                          isExpanded={isExpanded}
+                          onToggle={() => toggleTotalGroup(planNumber)}
+                          totalColumns={9}
+                          leadingCellCount={0}
+                          keyTimeLabel="最近变更"
+                          keyTimeValue={latestTotalTime ? fmtShort(latestTotalTime) : "-"}
+                          summaryFields={[
+                            { label: "主单号", value: leadOrder?.orderNumber || "-" },
+                            { label: "子单数", value: `${groupOrders.length} 单` },
+                            {
+                              label: "加急统计",
+                              value: groupOrders.every((item: any) => item.isUrgent)
+                                ? "全组加急"
+                                : groupOrders.some((item: any) => item.isUrgent)
+                                  ? `含加急 ${groupOrders.filter((item: any) => item.isUrgent).length} 单`
+                                  : "普通优先级",
+                              className: groupOrders.some((item: any) => item.isUrgent) ? "text-red-700" : undefined,
+                            },
+                            {
+                              label: "目的地统计",
+                              value: destinations.length <= 2 ? (destinations.join("、") || "-") : `${destinations[0]}等${destinations.length}地`,
+                            },
+                            { label: "总重量", value: `${totalWeight.toFixed(3)}t`, emphasize: true },
+                            {
+                              label: "当前阶段",
+                              value: (
+                                <div className="flex flex-wrap gap-1">
+                                  {Object.entries(statusCounts).map(([status, count]) => (
+                                    <Badge key={status} className={STATUS_COLORS[status] || "bg-gray-100 text-gray-700"}>
+                                      {STATUS_LABELS[status] || status}
+                                      {count > 1 ? `×${count}` : ""}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ),
+                            },
+                            {
+                              label: "关键时间",
+                              value: (
+                                <div className="space-y-1 text-xs leading-5 text-foreground">
+                                  <div>接单：{leadOrder?.orderDate ? fmtDate(leadOrder.orderDate) : "-"}</div>
+                                  <div>更新：{latestTotalTime ? fmtShort(latestTotalTime) : "-"}</div>
+                                </div>
+                              ),
+                            },
+                          ]}
+                          subtitle={
+                            <div className="space-y-1">
+                              <div>
+                                {leadOrder?.originCity || "-"} → {destinations.length <= 2 ? destinations.join("、") : `${destinations[0]}等${destinations.length}地`}
+                              </div>
+                              <div>客户：{leadOrder?.customerName || "-"}；货物：{leadOrder?.cargoName || "-"}</div>
+                            </div>
+                          }
+                          secondaryContent={(
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {businessTypes.map((label) => (
+                                  <Badge key={`${planNumber}-${label}`} variant="outline" className="text-[10px]">
+                                    {label}
+                                  </Badge>
+                                ))}
+                              </div>
+                              <div className="text-xs text-muted-foreground">负责人：{getOrderOwnerLabel(leadOrder)}；主单入口统一处理，子单自动跟随</div>
+                            </div>
+                          )}
+                          mainAction={renderTotalActionCell(leadOrder)}
+                        />
+                        {isExpanded
+                          ? groupOrders
+                              .filter((order: any) => order.id !== leadOrder?.id)
+                              .map((order: any) => renderTotalOrderRow(order, true))
+                          : null}
+                      </React.Fragment>
+                    );
+                  })}
+                  {totalGroupedData.ungrouped.map((order: any) => renderTotalOrderRow(order, false))}
+                </>
+              ) : (
+                totalOrders.map((order: any) => renderTotalOrderRow(order, false))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  return (
+    <DashboardLayout>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="flex items-center gap-2 text-xl font-semibold">
+              <ClipboardList className="h-5 w-5 text-primary" />
+              录单台
+            </h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              左侧一级菜单已收口为录单台；新建订单与退回订单统一回到这里完成修正、分流与闭环处理。
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setLocation("/orders/create?mode=paste")}>
+              <ClipboardList className="mr-1 h-4 w-4" />
+              智能粘贴
+            </Button>
+            <Button size="sm" onClick={() => setLocation("/orders/create")}>
+              <Plus className="mr-1 h-4 w-4" />
+              新建订单
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <Card>
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="rounded-lg bg-blue-100 p-2">
+                <ClipboardList className="h-4 w-4 text-blue-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">当前队列</div>
+                <div className="text-lg font-bold">{todayStats.total}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="rounded-lg bg-orange-100 p-2">
+                <Truck className="h-4 w-4 text-orange-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">外请预设</div>
+                <div className="text-lg font-bold">{todayStats.outsource}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="rounded-lg bg-green-100 p-2">
+                <Truck className="h-4 w-4 text-green-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">自运预设</div>
+                <div className="text-lg font-bold">{todayStats.self}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="rounded-lg bg-purple-100 p-2">
+                <Clock className="h-4 w-4 text-purple-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">零担预设</div>
+                <div className="text-lg font-bold">{todayStats.ltl}</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="rounded-lg bg-amber-100 p-2">
+                <RotateCcw className="h-4 w-4 text-amber-600" />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">退回待处理</div>
+                <div className="text-lg font-bold">{todayStats.returned}</div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="border-blue-200 bg-blue-50/70">
+          <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
+                <LayoutDashboard className="h-4 w-4" />
+                录单台已承接原“订单池”默认视图与退回闭环
+              </div>
+              <p className="text-xs leading-5 text-blue-800">
+                新建订单先进入“待分流”队列；录单员可先修正资料，再按业务类型分流到外请待定价、自运待调度、零担待询价。若后续工位退回到待指派，订单将自动进入“退回待处理”页签，在同一页完成修正、重新分流与重新指派。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="border-blue-300 text-blue-700 hover:bg-blue-100" onClick={() => setLocation("/station/command")}>
+                <LayoutDashboard className="mr-1 h-3.5 w-3.5" />
+                查看指挥台
+              </Button>
+              <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700" onClick={() => setLocation("/station/find-vehicle")}>
+                <Truck className="mr-1 h-3.5 w-3.5" />
+                查看找车台
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList>
+            <TabsTrigger value="orders">
+              <ClipboardList className="mr-1 h-3.5 w-3.5" />
+              录单闭环
+            </TabsTrigger>
+            <TabsTrigger value="total">
+              <LayoutDashboard className="mr-1 h-3.5 w-3.5" />
+              全部订单
+            </TabsTrigger>
+            <TabsTrigger value="settlement">
+              <FileSpreadsheet className="mr-1 h-3.5 w-3.5" />
+              TMS导出
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="orders" className="space-y-4">
+            <Tabs value={queueView} onValueChange={(value) => { setQueueView(value as "pool" | "returned"); setPage(1); }}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <TabsList>
+                  <TabsTrigger value="pool">
+                    <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                    待分流
+                  </TabsTrigger>
+                  <TabsTrigger value="returned">
+                    <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                    退回待处理
+                  </TabsTrigger>
+                </TabsList>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative min-w-[260px] flex-1 lg:w-[320px] lg:flex-none">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder={queueView === "returned" ? "搜索退回订单号、客户、原因..." : "搜索订单号、客户、目的地..."}
+                      value={search}
+                      onChange={(e) => {
+                        setSearch(e.target.value);
+                        setPage(1);
+                      }}
+                      className="h-9 pl-9"
+                    />
+                  </div>
+                  <Button
+                    variant={groupByPlan ? "default" : "outline"}
+                    size="sm"
+                    className="h-9 text-xs"
+                    onClick={() => setGroupByPlan((prev) => !prev)}
+                  >
+                    {groupByPlan ? <Layers className="mr-1 h-3.5 w-3.5" /> : <List className="mr-1 h-3.5 w-3.5" />}
+                    {groupByPlan ? "按计划分组" : "平铺列表"}
+                  </Button>
+                  {groupByPlan && hasGroups ? (
+                    <Button variant="outline" size="sm" className="h-9 text-xs" onClick={() => {
+                      if (expandedGroups.size > 0) collapseAll();
+                      else expandAll();
+                    }}>
+                      {expandedGroups.size > 0 ? "收起全部" : "展开全部"}
+                    </Button>
+                  ) : null}
+                  <Button variant="outline" size="sm" className="h-9" onClick={() => refetch()}>
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {selectedIds.size > 0 ? (
+                <Card className="border-primary/20 bg-primary/5">
+                  <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium">
+                        已选择 {selectedIds.size} 个订单，当前操作场景：{getQueueBadge(queueView)}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        系统会按每条订单当前业务类型自动分流到对应工位；如需调整，请先在表格中修改业务类型后再批量提交。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => setSelectedIds(new Set())}>清空选择</Button>
+                      {hasPermission("order.delete") ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-red-200 text-red-600 hover:bg-red-50"
+                          onClick={handleBatchDelete}
+                          disabled={deleteMutation.isPending || batchDeleteMutation.isPending}
+                        >
+                          {batchDeleteMutation.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
+                          批量删除
+                        </Button>
+                      ) : null}
+                      <Button size="sm" onClick={handleBatchRoute} disabled={isBatchRouting || batchUpdateStatus.isPending}>
+                        {isBatchRouting || batchUpdateStatus.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Workflow className="mr-1 h-4 w-4" />}
+                        {queueView === "returned" ? "批量重新分流" : "批量分流"}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              <TabsContent value="pool" className="mt-0 space-y-4">
+                {renderOrderTable()}
+                <TablePagination total={data?.total ?? 0} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+              </TabsContent>
+
+              <TabsContent value="returned" className="mt-0 space-y-4">
+                {renderOrderTable()}
+                <TablePagination total={data?.total ?? 0} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+              </TabsContent>
+            </Tabs>
+          </TabsContent>
+
+          <TabsContent value="total" className="space-y-4">
+            <Card className="border-slate-200 bg-slate-50/80">
+              <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                    <LayoutDashboard className="h-4 w-4" />
+                    全部订单/订单总表已并入录单台
+                  </div>
+                  <p className="text-xs leading-5 text-slate-700">
+                    这里集中查看当前账号可见的全部订单进度。你可以按订单号、客户、业务类型、状态、时间范围和责任调度筛选，并直接跳转到对应工位继续处理。
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="sm" className="h-9" onClick={() => refetchTotal()}>
+                    <RefreshCw className="mr-1 h-4 w-4" />
+                    刷新总表
+                  </Button>
+                  <Button
+                    variant={groupByPlan ? "default" : "outline"}
+                    size="sm"
+                    className="h-9"
+                    onClick={() => setGroupByPlan((prev) => !prev)}
+                  >
+                    {groupByPlan ? <Layers className="mr-1 h-4 w-4" /> : <List className="mr-1 h-4 w-4" />}
+                    {groupByPlan ? "按计划分组" : "平铺列表"}
+                  </Button>
+                  {groupByPlan && totalHasGroups ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={() => {
+                        if (totalExpandedGroups.size > 0) collapseAllTotal();
+                        else expandAllTotal();
+                      }}
+                    >
+                      {totalExpandedGroups.size > 0 ? "收起全部" : "展开全部"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={() => {
+                      setTotalKeyword("");
+                      setTotalBusinessType("all");
+                      setTotalStatus("all");
+                      setTotalCustomerId("all");
+                      setTotalDispatcherId("all");
+                      setTotalStartDate("");
+                      setTotalEndDate("");
+                      setTotalPage(1);
+                    }}
+                  >
+                    重置筛选
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              <Card>
+                <CardContent className="flex items-center gap-3 p-3">
+                  <div className="rounded-lg bg-slate-100 p-2">
+                    <ClipboardList className="h-4 w-4 text-slate-700" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">当前筛选总量</div>
+                    <div className="text-lg font-bold">{totalSummary.total}</div>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-3">
+                  <div className="rounded-lg bg-blue-100 p-2">
+                    <Workflow className="h-4 w-4 text-blue-700" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">当前页未完结</div>
+                    <div className="text-lg font-bold">{totalSummary.active}</div>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-3">
+                  <div className="rounded-lg bg-emerald-100 p-2">
+                    <Truck className="h-4 w-4 text-emerald-700" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">当前页在途执行</div>
+                    <div className="text-lg font-bold">{totalSummary.transit}</div>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-3">
+                  <div className="rounded-lg bg-amber-100 p-2">
+                    <FileSpreadsheet className="h-4 w-4 text-amber-700" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">当前页待回单</div>
+                    <div className="text-lg font-bold">{totalSummary.podPending}</div>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center gap-3 p-3">
+                  <div className="rounded-lg bg-green-100 p-2">
+                    <CheckCircle2 className="h-4 w-4 text-green-700" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">当前页已结算</div>
+                    <div className="text-lg font-bold">{totalSummary.done}</div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card>
+              <CardContent className="space-y-4 p-4">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="xl:col-span-2">
+                    <Label className="text-xs">订单号 / 客户 / 线路关键词</Label>
+                    <div className="relative mt-1">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={totalKeyword}
+                        onChange={(e) => {
+                          setTotalKeyword(e.target.value);
+                          setTotalPage(1);
+                        }}
+                        placeholder="搜索订单号、客户、收货人、车牌号..."
+                        className="h-9 pl-9"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">业务类型</Label>
+                    <Select value={totalBusinessType} onValueChange={(value) => {
+                      setTotalBusinessType(value);
+                      setTotalPage(1);
+                    }}>
+                      <SelectTrigger className="mt-1 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">全部类型</SelectItem>
+                        <SelectItem value="outsource">外请</SelectItem>
+                        <SelectItem value="self">自运</SelectItem>
+                        <SelectItem value="ltl">零担</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">当前状态</Label>
+                    <Select value={totalStatus} onValueChange={(value) => {
+                      setTotalStatus(value);
+                      setTotalPage(1);
+                    }}>
+                      <SelectTrigger className="mt-1 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">全部状态</SelectItem>
+                        {Object.entries(STATUS_LABELS).map(([key, label]) => (
+                          <SelectItem key={key} value={key}>{label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">客户</Label>
+                    <Select value={totalCustomerId} onValueChange={(value) => {
+                      setTotalCustomerId(value);
+                      setTotalPage(1);
+                    }}>
+                      <SelectTrigger className="mt-1 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">全部客户</SelectItem>
+                        {(customers ?? []).map((customer: any) => (
+                          <SelectItem key={customer.id} value={String(customer.id)}>
+                            {customer.shortName || customer.name || `客户#${customer.id}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">责任调度</Label>
+                    <Select value={totalDispatcherId} onValueChange={(value) => {
+                      setTotalDispatcherId(value);
+                      setTotalPage(1);
+                    }}>
+                      <SelectTrigger className="mt-1 h-9">
+                        <SelectValue placeholder={hasPermission("order.assign") ? "全部调度" : "当前账号无此筛选权限"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">全部调度</SelectItem>
+                        {(dispatcherList ?? []).map((dispatcher: any) => (
+                          <SelectItem key={dispatcher.id} value={String(dispatcher.id)}>
+                            {dispatcher.name || dispatcher.username}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">开始日期</Label>
+                    <Input
+                      type="date"
+                      value={totalStartDate}
+                      onChange={(e) => {
+                        setTotalStartDate(e.target.value);
+                        setTotalPage(1);
+                      }}
+                      className="mt-1 h-9"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">结束日期</Label>
+                    <Input
+                      type="date"
+                      value={totalEndDate}
+                      onChange={(e) => {
+                        setTotalEndDate(e.target.value);
+                        setTotalPage(1);
+                      }}
+                      className="mt-1 h-9"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {renderTotalTable()}
+            <TablePagination
+              total={totalData?.total ?? 0}
+              page={totalPage}
+              pageSize={totalPageSize}
+              onPageChange={setTotalPage}
+              onPageSizeChange={setTotalPageSize}
+            />
+          </TabsContent>
+
+          <TabsContent value="settlement">
+            <div className="space-y-4">
+              <Card>
+                <CardContent className="p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FileSpreadsheet className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-medium">TMS格式导出</span>
+                      <Badge variant="outline" className="text-[10px]">34列标准格式</Badge>
+                    </div>
+                    <Button size="sm" onClick={handleExportTMS} disabled={!tmsData?.rows?.length || tmsLoading}>
+                      <Download className="mr-1 h-4 w-4" />
+                      导出CSV {tmsData?.total ? `(${tmsData.total}条)` : ""}
+                    </Button>
+                  </div>
+                  <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-5">
+                    <div>
+                      <Label className="text-xs">导出类型</Label>
+                      <Select value={tmsExportType} onValueChange={(v) => setTmsExportType(v as any)}>
+                        <SelectTrigger className="mt-1 h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="full">全量导出</SelectItem>
+                          <SelectItem value="outsource">外请表</SelectItem>
+                          <SelectItem value="self">小车表（自运）</SelectItem>
+                          <SelectItem value="ltl">零担表</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">开始日期</Label>
+                      <Input type="date" className="mt-1 h-8 text-xs" value={tmsStartDate} onChange={(e) => setTmsStartDate(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">结束日期</Label>
+                      <Input type="date" className="mt-1 h-8 text-xs" value={tmsEndDate} onChange={(e) => setTmsEndDate(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">客户</Label>
+                      <Select value={tmsCustomerId} onValueChange={setTmsCustomerId}>
+                        <SelectTrigger className="mt-1 h-8 text-xs">
+                          <SelectValue placeholder="全部客户" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">全部客户</SelectItem>
+                          {customers?.map((customer: any) => (
+                            <SelectItem key={customer.id} value={String(customer.id)}>
+                              {customer.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-end">{tmsLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}</div>
+                  </div>
+                  {tmsData && tmsData.rows.length > 0 ? (
+                    <div className="max-h-[300px] overflow-auto rounded-lg border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/30">
+                            {tmsData.columns.slice(0, 12).map((col: string, idx: number) => (
+                              <TableHead key={idx} className="whitespace-nowrap px-2 text-[10px]">{col}</TableHead>
+                            ))}
+                            <TableHead className="text-[10px]">...</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {tmsData.rows.slice(0, 20).map((row: any[], rowIdx: number) => (
+                            <TableRow key={rowIdx}>
+                              {row.slice(0, 12).map((cell: any, cellIdx: number) => (
+                                <TableCell key={cellIdx} className="whitespace-nowrap px-2 text-[10px]">
+                                  {cell === null || cell === undefined || cell === "null" ? "" : String(cell)}
+                                </TableCell>
+                              ))}
+                              <TableCell className="text-[10px] text-muted-foreground">...</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : null}
+                  {tmsData && tmsData.rows.length > 20 ? (
+                    <p className="mt-2 text-center text-xs text-muted-foreground">
+                      预览显示前20条，导出CSV将包含全部 {tmsData.total} 条数据
+                    </p>
+                  ) : null}
+                  {(!tmsData || tmsData.rows.length === 0) && !tmsLoading ? (
+                    <div className="py-6 text-center text-muted-foreground">
+                      <FileSpreadsheet className="mx-auto mb-2 h-8 w-8 opacity-30" />
+                      <p className="text-xs">请设置筛选条件查看数据</p>
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认批量删除订单</AlertDialogTitle>
+            <AlertDialogDescription>
+              即将删除当前选中的 <span className="font-semibold text-foreground">{selectedOrders.length}</span> 个订单。删除后将无法恢复，确认继续？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => batchDeleteMutation.mutate({ ids: selectedOrders.map((order: any) => order.id) })}
+              disabled={batchDeleteMutation.isPending || selectedOrders.length === 0}
+            >
+              {batchDeleteMutation.isPending ? "删除中..." : `确认删除 ${selectedOrders.length} 个`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除订单</AlertDialogTitle>
+            <AlertDialogDescription>
+              订单 <span className="font-semibold text-foreground">{deleteTarget?.orderNumber || deleteTarget?.systemCode}</span> 删除后将无法恢复，确认继续？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id })}
+              disabled={deleteMutation.isPending || !deleteTarget?.id}
+            >
+              {deleteMutation.isPending ? "删除中..." : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!bizSwitchConfirm} onOpenChange={(open) => !open && setBizSwitchConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认切换业务类型</AlertDialogTitle>
+            <AlertDialogDescription>
+              订单 <span className="font-semibold text-foreground">{bizSwitchConfirm?.orderNumber}</span> 将从
+              <span className="font-semibold text-orange-600">「{BIZ_LABELS[bizSwitchConfirm?.from || ""] || bizSwitchConfirm?.from}」</span>
+              切换为
+              <span className="font-semibold text-blue-600">「{BIZ_LABELS[bizSwitchConfirm?.to || ""] || bizSwitchConfirm?.to}」</span>。
+              <br />
+              <br />
+              切换后订单仍保留在录单台待指派队列，由录单台重新分流承接。确认继续？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (bizSwitchConfirm) {
+                  updateFields.mutate({ id: bizSwitchConfirm.orderId, businessType: bizSwitchConfirm.to as any });
+                }
+                setBizSwitchConfirm(null);
+              }}
+            >
+              确认切换
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={!!assignDialog} onOpenChange={(open) => {
+        if (!open) {
+          setAssignDialog(null);
+          setSelectedDispatcherId("");
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重新指派外请调度员</DialogTitle>
+            <DialogDescription>
+              {assignDialog?.groupOrderIds?.length > 1
+                ? `组合单 ${assignDialog?.groupLabel || assignDialog?.orderNumber || assignDialog?.systemCode} 当前停留在录单台待处理队列。选择调度员后，系统将以主单为准整组送入“待找车”队列，子单自动跟随。`
+                : `订单 ${assignDialog?.orderNumber || assignDialog?.systemCode} 当前停留在录单台待处理队列。选择调度员后，系统将直接把该订单送入“待找车”队列。`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>选择调度员</Label>
+              <Select value={selectedDispatcherId} onValueChange={setSelectedDispatcherId}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="请选择外请调度员" />
+                </SelectTrigger>
+                <SelectContent>
+                  {outsourceDispatchers.map((dispatcher: any) => (
+                    <SelectItem key={dispatcher.id} value={String(dispatcher.id)}>
+                      {dispatcher.name || dispatcher.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {assignDialog?.lastReturnReason ? (
+              <div className="note-panel-readable border border-amber-200 bg-amber-50">
+                <div className="field-label-muted text-amber-700">最近退回原因</div>
+                <div className="field-value-readable text-amber-800 text-wrap-keep-linebreaks">{assignDialog.lastReturnReason}</div>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setAssignDialog(null); setSelectedDispatcherId(""); }}>取消</Button>
+            <Button
+              disabled={!selectedDispatcherId || manualAssign.isPending || batchManualAssign.isPending}
+              onClick={() => {
+                if (!assignDialog || !selectedDispatcherId) return;
+                if (assignDialog.groupOrderIds?.length > 1) {
+                  batchManualAssign.mutate({ orderIds: assignDialog.groupOrderIds, dispatcherId: parseInt(selectedDispatcherId) });
+                  return;
+                }
+                manualAssign.mutate({ orderId: assignDialog.id, dispatcherId: parseInt(selectedDispatcherId) });
+              }}
+            >
+              {manualAssign.isPending || batchManualAssign.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <UserPlus className="mr-1 h-4 w-4" />}
+              确认指派
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </DashboardLayout>
+  );
+}

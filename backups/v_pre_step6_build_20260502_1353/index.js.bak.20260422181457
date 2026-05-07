@@ -1,0 +1,4046 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// shared/const.ts
+var const_exports = {};
+__export(const_exports, {
+  AXIOS_TIMEOUT_MS: () => AXIOS_TIMEOUT_MS,
+  COOKIE_NAME: () => COOKIE_NAME,
+  NOT_ADMIN_ERR_MSG: () => NOT_ADMIN_ERR_MSG,
+  ONE_YEAR_MS: () => ONE_YEAR_MS,
+  UNAUTHED_ERR_MSG: () => UNAUTHED_ERR_MSG
+});
+var COOKIE_NAME, ONE_YEAR_MS, AXIOS_TIMEOUT_MS, UNAUTHED_ERR_MSG, NOT_ADMIN_ERR_MSG;
+var init_const = __esm({
+  "shared/const.ts"() {
+    "use strict";
+    COOKIE_NAME = "app_session_id";
+    ONE_YEAR_MS = 1e3 * 60 * 60 * 24 * 365;
+    AXIOS_TIMEOUT_MS = 3e4;
+    UNAUTHED_ERR_MSG = "Please login (10001)";
+    NOT_ADMIN_ERR_MSG = "You do not have required permission (10002)";
+  }
+});
+
+// drizzle/schema.ts
+var schema_exports = {};
+__export(schema_exports, {
+  approvals: () => approvals,
+  businessTypes: () => businessTypes,
+  cargoTypes: () => cargoTypes,
+  customers: () => customers,
+  departments: () => departments,
+  dispatcherRegions: () => dispatcherRegions,
+  drivers: () => drivers,
+  entryQueueReasons: () => entryQueueReasons,
+  freightStations: () => freightStations,
+  ltlDispatchBatchOrders: () => ltlDispatchBatchOrders,
+  ltlDispatchBatches: () => ltlDispatchBatches,
+  ltlInquiries: () => ltlInquiries,
+  ltlSubchainStages: () => ltlSubchainStages,
+  noteChangeLogs: () => noteChangeLogs,
+  operationLogs: () => operationLogs,
+  orderStatuses: () => orderStatuses,
+  orders: () => orders,
+  overdueNotifications: () => overdueNotifications,
+  pasteTemplates: () => pasteTemplates,
+  podOwnershipModes: () => podOwnershipModes,
+  podRecords: () => podRecords,
+  rolePermissions: () => rolePermissions,
+  systemConfig: () => systemConfig,
+  userRoles: () => userRoles,
+  users: () => users,
+  vehicles: () => vehicles,
+  warehouses: () => warehouses
+});
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  boolean,
+  decimal,
+  json
+} from "drizzle-orm/mysql-core";
+var userRoles, users, customers, warehouses, freightStations, vehicles, drivers, orderStatuses, businessTypes, entryQueueReasons, ltlSubchainStages, podOwnershipModes, orders, approvals, operationLogs, dispatcherRegions, podRecords, ltlInquiries, rolePermissions, departments, cargoTypes, ltlDispatchBatches, ltlDispatchBatchOrders, overdueNotifications, noteChangeLogs, pasteTemplates, systemConfig;
+var init_schema = __esm({
+  "drizzle/schema.ts"() {
+    "use strict";
+    userRoles = [
+      "admin",
+      // 管理员
+      "order_entry",
+      // 录单员
+      "ltl_cs",
+      // 零担客服
+      "chain_cs",
+      // 连锁客服
+      "ltl_dispatcher",
+      // 零担调度员
+      "outsource_dispatcher",
+      // 外请调度员
+      "fleet_dispatcher",
+      // 车队调度员
+      "field_manager",
+      // 现场管理员
+      "cs_manager",
+      // 客服经理
+      "finance_assistant"
+      // 财务助理
+    ];
+    users = mysqlTable("users", {
+      id: int("id").autoincrement().primaryKey(),
+      openId: varchar("openId", { length: 64 }).notNull().unique(),
+      username: varchar("username", { length: 64 }).unique(),
+      passwordHash: varchar("passwordHash", { length: 255 }),
+      name: text("name"),
+      email: varchar("email", { length: 320 }),
+      phone: varchar("phone", { length: 20 }),
+      loginMethod: varchar("loginMethod", { length: 64 }),
+      role: mysqlEnum("role", [
+        "admin",
+        "order_entry",
+        "ltl_cs",
+        "chain_cs",
+        "ltl_dispatcher",
+        "outsource_dispatcher",
+        "fleet_dispatcher",
+        "field_manager",
+        "cs_manager",
+        "finance_assistant"
+      ]).default("order_entry").notNull(),
+      region: varchar("region", { length: 200 }),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+      lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull()
+    });
+    customers = mysqlTable("customers", {
+      id: int("id").autoincrement().primaryKey(),
+      name: varchar("name", { length: 200 }).notNull(),
+      phone: varchar("phone", { length: 20 }),
+      salesperson: varchar("salesperson", { length: 100 }),
+      settlementType: mysqlEnum("settlementType", ["monthly", "cash", "collect"]).default("monthly").notNull(),
+      department: varchar("department", { length: 100 }),
+      remarks: text("remarks"),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+    warehouses = mysqlTable("warehouses", {
+      id: int("id").autoincrement().primaryKey(),
+      name: varchar("name", { length: 200 }).notNull(),
+      city: varchar("city", { length: 100 }),
+      address: text("address"),
+      phone: varchar("phone", { length: 20 }),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    freightStations = mysqlTable("freight_stations", {
+      id: int("id").autoincrement().primaryKey(),
+      name: varchar("name", { length: 200 }).notNull(),
+      address: text("address"),
+      phone: varchar("phone", { length: 20 }),
+      contactPerson: varchar("contactPerson", { length: 100 }),
+      coverageArea: text("coverageArea"),
+      remarks: text("remarks"),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    vehicles = mysqlTable("vehicles", {
+      id: int("id").autoincrement().primaryKey(),
+      plateNumber: varchar("plateNumber", { length: 20 }).notNull(),
+      vehicleType: mysqlEnum("vehicleType", ["own", "outsource"]).default("own").notNull(),
+      model: varchar("model", { length: 100 }),
+      capacity: decimal("capacity", { precision: 10, scale: 2 }),
+      driverId: int("driverId"),
+      status: mysqlEnum("status", ["available", "in_transit", "maintenance", "inactive"]).default("available").notNull(),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    drivers = mysqlTable("drivers", {
+      id: int("id").autoincrement().primaryKey(),
+      name: varchar("name", { length: 100 }).notNull(),
+      phone: varchar("phone", { length: 20 }),
+      idCard: varchar("idCard", { length: 20 }),
+      driverType: mysqlEnum("driverType", ["own", "outsource"]).default("own").notNull(),
+      commonPlateNumber: varchar("commonPlateNumber", { length: 20 }),
+      depositAmount: decimal("depositAmount", { precision: 10, scale: 2 }),
+      depositStatus: mysqlEnum("depositStatus", ["none", "paid", "refunded"]).default("none").notNull(),
+      remarks: text("remarks"),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    orderStatuses = [
+      "pending_assign",
+      // 待指派
+      "pending_dispatch",
+      // 待调度（自运）
+      "pending_price",
+      // 待定价（外请）
+      "priced",
+      // 已定价（外请）
+      "pending_vehicle",
+      // 待找车（外请）
+      "pending_approval",
+      // 待审批（外请）
+      "pending_inquiry",
+      // 待询价（零担）
+      "inquiry_confirmed",
+      // 已询价（零担）
+      "dispatched",
+      // 已调度
+      "in_transit",
+      // 运输中
+      "partial_delivered",
+      // 部分送达
+      "delivered",
+      // 已送达
+      "signed",
+      // 已签收
+      "settled",
+      // 已结算
+      "on_hold",
+      // 等通知
+      "cancelled",
+      // 已取消
+      "merged"
+      // 已合并（拼车子订单）
+    ];
+    businessTypes = ["outsource", "self", "ltl"];
+    entryQueueReasons = ["new", "returned", "rerouted"];
+    ltlSubchainStages = ["pickup", "delivery"];
+    podOwnershipModes = ["current_order", "delivery_outsource", "none"];
+    orders = mysqlTable("orders", {
+      id: int("id").autoincrement().primaryKey(),
+      // 订单标识
+      orderNumber: varchar("orderNumber", { length: 100 }).notNull(),
+      // 客户订单号（主标识）
+      systemCode: varchar("systemCode", { length: 50 }).notNull(),
+      // 系统内部编号（降级为内部用）
+      mergedPlanNumber: varchar("mergedPlanNumber", { length: 100 }),
+      // 合并计划号（如P0000050961，多个子单关联）
+      // 业务分类
+      businessType: mysqlEnum("businessType", ["outsource", "self", "ltl"]).notNull(),
+      department: varchar("department", { length: 100 }),
+      status: mysqlEnum("status", [
+        "pending_assign",
+        "pending_dispatch",
+        "pending_price",
+        "priced",
+        "pending_vehicle",
+        "pending_approval",
+        "pending_inquiry",
+        "inquiry_confirmed",
+        "shipped",
+        "dispatched",
+        "in_transit",
+        "partial_delivered",
+        "delivered",
+        "signed",
+        "settled",
+        "on_hold",
+        "cancelled",
+        "merged"
+      ]).default("pending_assign").notNull(),
+      entryQueueReason: mysqlEnum("entryQueueReason", ["new", "returned", "rerouted"]),
+      entryQueueSourceStatus: varchar("entryQueueSourceStatus", { length: 50 }),
+      entryQueueEnteredAt: timestamp("entryQueueEnteredAt"),
+      entryQueueReturnedBy: varchar("entryQueueReturnedBy", { length: 100 }),
+      entryQueueReturnReason: text("entryQueueReturnReason"),
+      isUrgent: boolean("isUrgent").default(false).notNull(),
+      urgentReason: text("urgentReason"),
+      // 客户信息
+      customerId: int("customerId"),
+      customerName: varchar("customerName", { length: 200 }),
+      customerPhone: varchar("customerPhone", { length: 20 }),
+      settlementType: mysqlEnum("settlementType_order", ["monthly", "cash", "collect"]).default("monthly"),
+      // 货物信息
+      cargoName: varchar("cargoName", { length: 200 }),
+      weight: decimal("weight", { precision: 10, scale: 3 }),
+      packagingType: mysqlEnum("packagingType", ["pallet", "loose", "pallet_loaded"]),
+      cargoSpec: text("cargoSpec"),
+      specialRequirements: text("specialRequirements"),
+      // 发货信息
+      warehouseId: int("warehouseId"),
+      warehouseName: varchar("warehouseName", { length: 200 }),
+      originCity: varchar("originCity", { length: 100 }),
+      originProvince: varchar("originProvince", { length: 100 }),
+      // 发货省
+      // 收货信息
+      deliveryAddress: text("deliveryAddress"),
+      destinationCity: varchar("destinationCity", { length: 200 }),
+      destinationProvince: varchar("destinationProvince", { length: 100 }),
+      // 收货省
+      receiverName: varchar("receiverName", { length: 100 }),
+      receiverPhone: varchar("receiverPhone", { length: 20 }),
+      // 费用信息
+      customerPrice: decimal("customerPrice", { precision: 14, scale: 4 }),
+      // 客户给我们的价格
+      quotedPrice: decimal("quotedPrice", { precision: 14, scale: 4 }),
+      dispatchPrice: decimal("dispatchPrice", { precision: 14, scale: 4 }),
+      actualFreight: decimal("actualFreight", { precision: 14, scale: 4 }),
+      deliveryFee: decimal("deliveryFee", { precision: 14, scale: 4 }),
+      extraFee: decimal("extraFee", { precision: 14, scale: 4 }),
+      totalCost: decimal("totalCost", { precision: 14, scale: 4 }),
+      // 调度信息
+      assignedDispatcherId: int("assignedDispatcherId"),
+      holdReason: text("holdReason"),
+      releaseReason: text("releaseReason"),
+      holdBy: int("holdBy"),
+      holdAt: timestamp("holdAt"),
+      preHoldStatus: varchar("preHoldStatus", { length: 50 }),
+      preHoldAssignee: int("preHoldAssignee"),
+      driverId: int("driverId"),
+      // 关联司机表ID
+      vehicleId: int("vehicleId"),
+      // 关联车辆表ID
+      plateNumber: varchar("plateNumber", { length: 20 }),
+      driverName: varchar("driverName", { length: 100 }),
+      driverPhone: varchar("driverPhone", { length: 20 }),
+      freightStationId: int("freightStationId"),
+      freightStationName: varchar("freightStationName", { length: 200 }),
+      // 零担询价
+      ltlFinalStation: varchar("ltlFinalStation", { length: 200 }),
+      ltlFreightPrice: decimal("ltlFreightPrice", { precision: 14, scale: 4 }),
+      ltlInquiryStatus: mysqlEnum("ltlInquiryStatus", ["pending", "quoted", "confirmed", "cancelled"]),
+      // 押金信息（调度派车时填写）
+      depositAmount: decimal("depositAmount", { precision: 10, scale: 2 }),
+      depositRefundable: boolean("depositRefundable").default(true),
+      depositStatus: mysqlEnum("depositStatus_order", ["none", "paid", "refunded", "not_refundable"]).default("none").notNull(),
+      // 零担费用明细
+      ltlUnitPrice: decimal("ltlUnitPrice", { precision: 14, scale: 4 }),
+      // 单价（元/吨）
+      ltlDeliveryFee: decimal("ltlDeliveryFee", { precision: 14, scale: 2 }),
+      // 送货费
+      ltlOtherFee: decimal("ltlOtherFee", { precision: 14, scale: 2 }),
+      // 其他费
+      // 货站运单信息
+      freightWaybillNumber: varchar("freightWaybillNumber", { length: 100 }),
+      // 货站运单号
+      inquiryPhone: varchar("inquiryPhone", { length: 50 }),
+      // 查货电话
+      // 大板标记
+      isLargeSlab: boolean("isLargeSlab").default(false),
+      // 瓷砖大板（1800×900及以上）
+      chargeableWeight: decimal("chargeableWeight", { precision: 10, scale: 3 }),
+      // 计费重量（大板整车用，如客户给的包车重量）
+      packageCount: int("packageCount"),
+      // 架数/件数（大板零担用）
+      palletCount: int("palletCount"),
+      // 托数（与架数分开存储）
+      largeSlabShippingRequired: boolean("largeSlabShippingRequired").default(false),
+      // 是否按大板发货要求执行
+      // 货站开单图片（司机上传）
+      stationReceiptUrl: text("stationReceiptUrl"),
+      stationReceiptUploadedAt: timestamp("stationReceiptUploadedAt"),
+      // 回单状态
+      podStatus: mysqlEnum("podStatus", ["none", "uploaded", "verified", "original_sent", "original_received"]).default("none"),
+      // 回单唯一归属：当前订单负责 / 已转后段外请负责 / 当前订单不负责
+      podOwnership: mysqlEnum("podOwnership", ["current_order", "delivery_outsource", "none"]).default("current_order").notNull(),
+      // 自动分派
+      autoAssignedAt: timestamp("autoAssignedAt"),
+      autoAssignedRegion: varchar("autoAssignedRegion", { length: 200 }),
+      // 时间信息 - 完整的日期跟踪体系
+      orderDate: timestamp("orderDate"),
+      // 下单日期（客户下单时间）
+      dispatchDate: timestamp("dispatchDate"),
+      // 派车日期（确认派车时间）
+      loadingDate: timestamp("loadingDate"),
+      // 装货日期
+      transitDate: timestamp("transitDate"),
+      // 发车日期（开始运输时间）
+      deliveryDate: timestamp("deliveryDate"),
+      // 送货日期（到达目的地时间）
+      deliveredQty: decimal("deliveredQty", { precision: 10, scale: 3 }),
+      remainingQty: decimal("remainingQty", { precision: 10, scale: 3 }),
+      signedDate: timestamp("signedDate"),
+      // 签收日期（收货人签收时间）
+      signExceptionType: mysqlEnum("signExceptionType", ["damage", "shortage", "reject", "other"]),
+      exceptionQty: decimal("exceptionQty", { precision: 10, scale: 3 }),
+      damageDesc: text("damageDesc"),
+      rejectReason: text("rejectReason"),
+      evidenceUrls: json("evidenceUrls"),
+      signedBy: varchar("signedBy", { length: 100 }),
+      signedAttachments: json("signedAttachments"),
+      signedRemark: text("signedRemark"),
+      approvalDate: timestamp("approvalDate"),
+      // 审批日期（审批通过/驳回时间）
+      depositRefundDate: timestamp("depositRefundDate"),
+      // 退押金日期
+      // 回单结算
+      podDate: timestamp("podDate"),
+      // 回单上传日期
+      podSentDate: timestamp("podSentDate"),
+      // 回单寄出日期
+      podTrackingNumber: varchar("podTrackingNumber", { length: 100 }),
+      // 回单快递单号
+      verificationNumber: varchar("verificationNumber", { length: 100 }),
+      // 调度员备注（如付款条件、司机要求等）
+      dispatcherRemark: text("dispatcherRemark"),
+      // 发货备注（客服录单时填写，记录货物规格、多少托、多少板、包装要求等发货相关信息）
+      shippingNote: text("shippingNote"),
+      // 结构化收货确认
+      receivingStatus: mysqlEnum("receivingStatus", ["receivable", "wait_notice", "not_receivable"]),
+      expectedReceiveAt: timestamp("expectedReceiveAt"),
+      nextFollowUpAt: timestamp("nextFollowUpAt"),
+      receivingReason: text("receivingReason"),
+      // 收货备注（调度员联系收货人/业务员后填写的收货要求/补充说明）
+      receivingNote: text("receivingNote"),
+      receivingConfirmedAt: timestamp("receivingConfirmedAt"),
+      receivingConfirmedBy: int("receivingConfirmedBy"),
+      receivingConfirmedByName: varchar("receivingConfirmedByName", { length: 100 }),
+      // 合并订单（拼车）
+      parentId: int("parentId"),
+      // 父订单ID（拼车主订单）
+      relatedParentIds: json("relatedParentIds"),
+      subchainStage: mysqlEnum("subchainStage", ["pickup", "delivery"]),
+      ltlSegmentMode: varchar("ltlSegmentMode", { length: 50 }),
+      isMerged: boolean("isMerged").default(false),
+      // 是否为合并主订单
+      // 其他备注
+      remarks: text("remarks"),
+      createdBy: int("createdBy"),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+    approvals = mysqlTable("approvals", {
+      id: int("id").autoincrement().primaryKey(),
+      orderId: int("orderId").notNull(),
+      approvalType: mysqlEnum("approvalType", ["initial_price", "vehicle_quote", "surcharge"]).notNull(),
+      applicantId: int("applicantId").notNull(),
+      applicantName: varchar("applicantName", { length: 100 }),
+      approverId: int("approverId"),
+      approverName: varchar("approverName", { length: 100 }),
+      status: mysqlEnum("approvalStatus", ["pending", "approved", "rejected"]).default("pending").notNull(),
+      previousStatus: varchar("previousStatus", { length: 50 }),
+      // 审批前订单状态，驳回时精准回退
+      requestedAmount: decimal("requestedAmount", { precision: 14, scale: 4 }),
+      approvedAmount: decimal("approvedAmount", { precision: 14, scale: 4 }),
+      reason: text("reason"),
+      approverComment: text("approverComment"),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+    operationLogs = mysqlTable("operation_logs", {
+      id: int("id").autoincrement().primaryKey(),
+      userId: int("userId"),
+      userName: varchar("userName", { length: 100 }),
+      action: varchar("action", { length: 50 }).notNull(),
+      targetType: varchar("targetType", { length: 50 }).notNull(),
+      targetId: varchar("targetId", { length: 100 }),
+      changes: json("changes"),
+      ipAddress: varchar("ipAddress", { length: 50 }),
+      description: text("description"),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    dispatcherRegions = mysqlTable("dispatcher_regions", {
+      id: int("id").autoincrement().primaryKey(),
+      dispatcherId: int("dispatcherId").notNull(),
+      province: varchar("province", { length: 100 }).notNull(),
+      city: varchar("city", { length: 100 }),
+      priority: int("priority").default(0),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    podRecords = mysqlTable("pod_records", {
+      id: int("id").autoincrement().primaryKey(),
+      orderId: int("orderId").notNull(),
+      podOwnership: mysqlEnum("podOwnership", ["current_order", "delivery_outsource", "none"]).default("current_order").notNull(),
+      deliveryNoteUrl: text("deliveryNoteUrl"),
+      ocrResult: json("ocrResult"),
+      ocrVerified: boolean("ocrVerified").default(false),
+      ocrVerifiedBy: int("ocrVerifiedBy"),
+      ocrVerifiedAt: timestamp("ocrVerifiedAt"),
+      originalStatus: mysqlEnum("originalStatus", ["pending", "sent", "received", "lost"]).default("pending").notNull(),
+      originalSentAt: timestamp("originalSentAt"),
+      originalReceivedAt: timestamp("originalReceivedAt"),
+      originalReceivedBy: int("originalReceivedBy"),
+      depositLinked: boolean("depositLinked").default(false),
+      depositAmount: decimal("depositAmount", { precision: 10, scale: 2 }),
+      depositRefunded: boolean("depositRefunded").default(false),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+    ltlInquiries = mysqlTable("ltl_inquiries", {
+      id: int("id").autoincrement().primaryKey(),
+      orderId: int("orderId").notNull(),
+      freightStationId: int("freightStationId").notNull(),
+      finalStationName: varchar("finalStationName", { length: 200 }),
+      quotedPrice: decimal("quotedPrice", { precision: 14, scale: 4 }),
+      confirmedPrice: decimal("confirmedPrice", { precision: 14, scale: 4 }),
+      unitPrice: decimal("unitPrice", { precision: 14, scale: 4 }),
+      // 单价（元/吨）
+      deliveryFee: decimal("deliveryFee", { precision: 14, scale: 2 }),
+      // 送货费
+      otherFee: decimal("otherFee", { precision: 14, scale: 2 }),
+      // 其他费
+      packageCount: int("packageCount"),
+      // 架数（大板零担用）
+      inquiryStatus: mysqlEnum("inquiryStatus", ["pending", "quoted", "confirmed", "cancelled"]).default("pending").notNull(),
+      inquiredBy: int("inquiredBy").notNull(),
+      remarks: text("remarks"),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    rolePermissions = mysqlTable("role_permissions", {
+      id: int("id").autoincrement().primaryKey(),
+      role: varchar("role", { length: 50 }).notNull(),
+      permissionKey: varchar("permissionKey", { length: 100 }).notNull(),
+      allowed: boolean("allowed").default(false).notNull(),
+      updatedBy: int("updatedBy"),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+    departments = mysqlTable("departments", {
+      id: int("id").autoincrement().primaryKey(),
+      name: varchar("name", { length: 200 }).notNull(),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    cargoTypes = mysqlTable("cargo_types", {
+      id: int("id").autoincrement().primaryKey(),
+      name: varchar("name", { length: 200 }).notNull(),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    ltlDispatchBatches = mysqlTable("ltl_dispatch_batches", {
+      id: int("id").autoincrement().primaryKey(),
+      batchCode: varchar("batchCode", { length: 50 }).notNull(),
+      // 批次号，如 LTL20260228001
+      plateNumber: varchar("plateNumber", { length: 20 }).notNull(),
+      driverName: varchar("driverName", { length: 100 }).notNull(),
+      driverPhone: varchar("driverPhone", { length: 20 }),
+      dispatchDate: timestamp("dispatchDate").defaultNow().notNull(),
+      remark: text("remark"),
+      createdBy: int("createdBy"),
+      createdByName: varchar("createdByName", { length: 100 }),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    ltlDispatchBatchOrders = mysqlTable("ltl_dispatch_batch_orders", {
+      id: int("id").autoincrement().primaryKey(),
+      batchId: int("batchId").notNull(),
+      orderId: int("orderId").notNull(),
+      remark: text("remark"),
+      // 每单备注（如运费信息、批次号等）
+      sortOrder: int("sortOrder").default(0),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    overdueNotifications = mysqlTable("overdue_notifications", {
+      id: int("id").autoincrement().primaryKey(),
+      podId: int("podId").notNull(),
+      orderId: int("orderId").notNull(),
+      level: mysqlEnum("level", ["yellow", "orange", "red"]).notNull(),
+      // 预警级别
+      recipientRole: varchar("recipientRole", { length: 50 }).notNull(),
+      // 接收者角色
+      recipientUserId: int("recipientUserId"),
+      // 接收者用户ID（调度员时有值）
+      overdueDays: int("overdueDays").notNull(),
+      sentAt: timestamp("sentAt").defaultNow().notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    noteChangeLogs = mysqlTable("note_change_logs", {
+      id: int("id").autoincrement().primaryKey(),
+      orderId: int("orderId").notNull(),
+      field: mysqlEnum("field", ["shippingNote", "receivingNote"]).notNull(),
+      oldValue: text("oldValue"),
+      newValue: text("newValue"),
+      changedByUserId: int("changedByUserId").notNull(),
+      changedByUserName: varchar("changedByUserName", { length: 100 }).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull()
+    });
+    pasteTemplates = mysqlTable("paste_templates", {
+      id: int("id").autoincrement().primaryKey(),
+      customerName: varchar("customerName", { length: 200 }).notNull(),
+      templateName: varchar("templateName", { length: 200 }),
+      // 模板名称，如"XX客户标准格式"
+      sampleText: text("sampleText").notNull(),
+      // 原始粘贴文本样本
+      fieldMapping: json("fieldMapping"),
+      // 字段映射规则 JSON
+      successCount: int("successCount").default(0).notNull(),
+      // 成功使用次数
+      lastUsedAt: timestamp("lastUsedAt"),
+      createdBy: int("createdBy").notNull(),
+      createdByName: varchar("createdByName", { length: 100 }),
+      isActive: boolean("isActive").default(true).notNull(),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+    systemConfig = mysqlTable("system_config", {
+      id: int("id").autoincrement().primaryKey(),
+      configKey: varchar("config_key", { length: 100 }).notNull().unique(),
+      configValue: text("config_value").notNull(),
+      description: varchar("description", { length: 255 }),
+      updatedById: int("updated_by_id"),
+      updatedByName: varchar("updated_by_name", { length: 100 }),
+      createdAt: timestamp("createdAt").defaultNow().notNull(),
+      updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull()
+    });
+  }
+});
+
+// server/_core/env.ts
+var ENV;
+var init_env = __esm({
+  "server/_core/env.ts"() {
+    "use strict";
+    ENV = {
+      appId: process.env.VITE_APP_ID ?? "",
+      cookieSecret: process.env.JWT_SECRET ?? "",
+      databaseUrl: process.env.DATABASE_URL ?? "",
+      oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
+      ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
+      isProduction: process.env.NODE_ENV === "production",
+      forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
+      forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? ""
+    };
+  }
+});
+
+// shared/permissions.ts
+var PERMISSIONS, ALL_PERMISSION_KEYS, PERMISSION_GROUPS, DEFAULT_ROLE_PERMISSIONS, PERMISSION_LABELS;
+var init_permissions = __esm({
+  "shared/permissions.ts"() {
+    "use strict";
+    PERMISSIONS = {
+      // 订单管理
+      ORDER_CREATE: "order.create",
+      ORDER_EDIT: "order.edit",
+      ORDER_MARK_URGENT: "order.mark_urgent",
+      ORDER_ADJUST: "order.adjust",
+      // 随时调整订单（含变更业务类型）
+      ORDER_VIEW_ALL: "order.view_all",
+      ORDER_VIEW_OWN: "order.view_own",
+      ORDER_ASSIGN: "order.assign",
+      // 指派业务类型和调度员
+      ORDER_HOLD_CANCEL: "order.hold_cancel",
+      // 搁置/恢复/取消
+      ORDER_UPDATE_STATUS: "order.update_status",
+      ORDER_DELETE: "order.delete",
+      // 删除订单
+      ORDER_ROLLBACK: "order.rollback",
+      // 退回订单至上一步
+      // 调度看板
+      KANBAN_GLOBAL: "kanban.global",
+      KANBAN_OUTSOURCE: "kanban.outsource",
+      KANBAN_SELF: "kanban.self",
+      KANBAN_LTL: "kanban.ltl",
+      // 外请调度
+      OUTSOURCE_VEHICLE_INPUT: "outsource.vehicle_input",
+      OUTSOURCE_SUBMIT_QUOTE: "outsource.submit_quote",
+      OUTSOURCE_SET_PRICE: "outsource.set_price",
+      // 自运调度
+      FLEET_DISPATCH: "fleet.dispatch",
+      FLEET_VEHICLE_STATUS: "fleet.vehicle_status",
+      // 零担调度
+      LTL_INQUIRY: "ltl.inquiry",
+      LTL_ARRANGE_SHIP: "ltl.arrange_ship",
+      LTL_UPLOAD_POD: "ltl.upload_pod",
+      LTL_OCR_VERIFY: "ltl.ocr_verify",
+      // 审批中心
+      APPROVAL_EXECUTE: "approval.execute",
+      APPROVAL_VIEW_HISTORY: "approval.view_history",
+      // 回单管理
+      POD_VIEW: "pod.view",
+      POD_MARK_SENT: "pod.mark_sent",
+      POD_CONFIRM_RECEIVED: "pod.confirm_received",
+      POD_REFUND_DEPOSIT: "pod.refund_deposit",
+      // 基础配置
+      CONFIG_CUSTOMER: "config.customer",
+      CONFIG_WAREHOUSE: "config.warehouse",
+      CONFIG_VEHICLE_DRIVER: "config.vehicle_driver",
+      CONFIG_USER: "config.user",
+      CONFIG_DISPATCHER_REGION: "config.dispatcher_region",
+      CONFIG_PERMISSION: "config.permission",
+      // 数据导出
+      EXPORT_ORDER_TOTAL: "export.order_total",
+      EXPORT_OUTSOURCE: "export.outsource",
+      EXPORT_FLEET_LTL: "export.fleet_ltl",
+      EXPORT_CUSTOMER_LEDGER: "export.customer_ledger",
+      // 运价数据库
+      FREIGHT_RATE_VIEW: "freight_rate.view",
+      FREIGHT_RATE_EXPORT: "freight_rate.export",
+      // 统计看板
+      STATS_FULL: "stats.full",
+      STATS_PERSONAL: "stats.personal",
+      // 操作日志
+      LOG_VIEW: "log.view"
+    };
+    ALL_PERMISSION_KEYS = Object.values(PERMISSIONS);
+    PERMISSION_GROUPS = [
+      {
+        name: "\u8BA2\u5355\u7BA1\u7406",
+        permissions: [
+          { key: PERMISSIONS.ORDER_CREATE, label: "\u521B\u5EFA\u8BA2\u5355" },
+          { key: PERMISSIONS.ORDER_EDIT, label: "\u7F16\u8F91\u8BA2\u5355\u57FA\u672C\u4FE1\u606F" },
+          { key: PERMISSIONS.ORDER_MARK_URGENT, label: "\u6807\u8BB0\u52A0\u6025" },
+          { key: PERMISSIONS.ORDER_ADJUST, label: "\u968F\u65F6\u8C03\u6574\u8BA2\u5355" },
+          { key: PERMISSIONS.ORDER_VIEW_ALL, label: "\u67E5\u770B\u6240\u6709\u8BA2\u5355" },
+          { key: PERMISSIONS.ORDER_VIEW_OWN, label: "\u67E5\u770B\u672C\u4EBA\u8D1F\u8D23\u8BA2\u5355" },
+          { key: PERMISSIONS.ORDER_ASSIGN, label: "\u6307\u6D3E\u4E1A\u52A1\u7C7B\u578B\u548C\u8C03\u5EA6\u5458" },
+          { key: PERMISSIONS.ORDER_HOLD_CANCEL, label: "\u6401\u7F6E/\u6062\u590D/\u53D6\u6D88\u8BA2\u5355" },
+          { key: PERMISSIONS.ORDER_UPDATE_STATUS, label: "\u66F4\u65B0\u8FD0\u8F93\u72B6\u6001" },
+          { key: PERMISSIONS.ORDER_DELETE, label: "\u5220\u9664\u8BA2\u5355" },
+          { key: PERMISSIONS.ORDER_ROLLBACK, label: "\u9000\u56DE\u8BA2\u5355\u81F3\u4E0A\u4E00\u6B65" }
+        ]
+      },
+      {
+        name: "\u8C03\u5EA6\u770B\u677F",
+        permissions: [
+          { key: PERMISSIONS.KANBAN_GLOBAL, label: "\u67E5\u770B\u5168\u5C40\u770B\u677F" },
+          { key: PERMISSIONS.KANBAN_OUTSOURCE, label: "\u67E5\u770B\u5916\u8BF7\u770B\u677F" },
+          { key: PERMISSIONS.KANBAN_SELF, label: "\u67E5\u770B\u81EA\u8FD0\u770B\u677F" },
+          { key: PERMISSIONS.KANBAN_LTL, label: "\u67E5\u770B\u96F6\u62C5\u770B\u677F" }
+        ]
+      },
+      {
+        name: "\u5916\u8BF7\u8C03\u5EA6",
+        permissions: [
+          { key: PERMISSIONS.OUTSOURCE_VEHICLE_INPUT, label: "\u5F55\u5165\u5916\u8BF7\u8F66\u8F86\u4FE1\u606F" },
+          { key: PERMISSIONS.OUTSOURCE_SUBMIT_QUOTE, label: "\u63D0\u4EA4\u62A5\u4EF7/\u52A0\u4EF7/\u57AB\u4ED8\u7533\u8BF7" },
+          { key: PERMISSIONS.OUTSOURCE_SET_PRICE, label: "\u5916\u8BF7\u5B9A\u4EF7" }
+        ]
+      },
+      {
+        name: "\u81EA\u8FD0\u8C03\u5EA6",
+        permissions: [
+          { key: PERMISSIONS.FLEET_DISPATCH, label: "\u9009\u62E9\u81EA\u8FD0\u8F66\u8F86\u6D3E\u5355" },
+          { key: PERMISSIONS.FLEET_VEHICLE_STATUS, label: "\u7BA1\u7406\u8F66\u8F86\u72B6\u6001" }
+        ]
+      },
+      {
+        name: "\u96F6\u62C5\u8C03\u5EA6",
+        permissions: [
+          { key: PERMISSIONS.LTL_INQUIRY, label: "\u96F6\u62C5\u8BE2\u4EF7" },
+          { key: PERMISSIONS.LTL_ARRANGE_SHIP, label: "\u5B89\u6392\u96F6\u62C5\u53D1\u8FD0" },
+          { key: PERMISSIONS.LTL_UPLOAD_POD, label: "\u4E0A\u4F20\u9001\u8D27\u5355" },
+          { key: PERMISSIONS.LTL_OCR_VERIFY, label: "OCR\u6838\u9A8C" }
+        ]
+      },
+      {
+        name: "\u5BA1\u6279\u4E2D\u5FC3",
+        permissions: [
+          { key: PERMISSIONS.APPROVAL_EXECUTE, label: "\u6267\u884C\u5BA1\u6279" },
+          { key: PERMISSIONS.APPROVAL_VIEW_HISTORY, label: "\u67E5\u770B\u5BA1\u6279\u5386\u53F2" }
+        ]
+      },
+      {
+        name: "\u56DE\u5355\u7BA1\u7406",
+        permissions: [
+          { key: PERMISSIONS.POD_VIEW, label: "\u67E5\u770B\u56DE\u5355\u5217\u8868" },
+          { key: PERMISSIONS.POD_MARK_SENT, label: "\u6807\u8BB0\u539F\u4EF6\u5DF2\u5BC4\u51FA" },
+          { key: PERMISSIONS.POD_CONFIRM_RECEIVED, label: "\u786E\u8BA4\u539F\u4EF6\u5DF2\u6536\u5230" },
+          { key: PERMISSIONS.POD_REFUND_DEPOSIT, label: "\u6807\u8BB0\u62BC\u91D1\u5DF2\u9000\u8FD8" }
+        ]
+      },
+      {
+        name: "\u57FA\u7840\u914D\u7F6E",
+        permissions: [
+          { key: PERMISSIONS.CONFIG_CUSTOMER, label: "\u5BA2\u6237\u7BA1\u7406" },
+          { key: PERMISSIONS.CONFIG_WAREHOUSE, label: "\u4ED3\u5E93/\u8D27\u7AD9/\u90E8\u95E8/\u8D27\u7269\u914D\u7F6E" },
+          { key: PERMISSIONS.CONFIG_VEHICLE_DRIVER, label: "\u8F66\u8F86/\u53F8\u673A\u7BA1\u7406" },
+          { key: PERMISSIONS.CONFIG_USER, label: "\u7528\u6237\u7BA1\u7406" },
+          { key: PERMISSIONS.CONFIG_DISPATCHER_REGION, label: "\u8C03\u5EA6\u5458\u533A\u57DF\u914D\u7F6E" },
+          { key: PERMISSIONS.CONFIG_PERMISSION, label: "\u6743\u9650\u914D\u7F6E" }
+        ]
+      },
+      {
+        name: "\u6570\u636E\u5BFC\u51FA",
+        permissions: [
+          { key: PERMISSIONS.EXPORT_ORDER_TOTAL, label: "\u5BFC\u51FA\u8BA2\u5355\u603B\u8868" },
+          { key: PERMISSIONS.EXPORT_OUTSOURCE, label: "\u5BFC\u51FA\u5916\u8BF7\u8868" },
+          { key: PERMISSIONS.EXPORT_FLEET_LTL, label: "\u5BFC\u51FA\u5C0F\u8F66/\u96F6\u62C5\u8868" },
+          { key: PERMISSIONS.EXPORT_CUSTOMER_LEDGER, label: "\u5BA2\u6237\u53F0\u8D26\u65E5\u5BFC\u51FA" }
+        ]
+      },
+      {
+        name: "\u8FD0\u4EF7\u6570\u636E\u5E93",
+        permissions: [
+          { key: PERMISSIONS.FREIGHT_RATE_VIEW, label: "\u67E5\u770B\u5386\u53F2\u8FD0\u4EF7" },
+          { key: PERMISSIONS.FREIGHT_RATE_EXPORT, label: "\u5BFC\u51FA\u8FD0\u4EF7\u6570\u636E" }
+        ]
+      },
+      {
+        name: "\u7EDF\u8BA1\u4E0E\u65E5\u5FD7",
+        permissions: [
+          { key: PERMISSIONS.STATS_FULL, label: "\u67E5\u770B\u5B8C\u6574\u7EDF\u8BA1" },
+          { key: PERMISSIONS.STATS_PERSONAL, label: "\u67E5\u770B\u4E2A\u4EBA\u7EDF\u8BA1" },
+          { key: PERMISSIONS.LOG_VIEW, label: "\u67E5\u770B\u64CD\u4F5C\u65E5\u5FD7" }
+        ]
+      }
+    ];
+    DEFAULT_ROLE_PERMISSIONS = {
+      admin: ALL_PERMISSION_KEYS,
+      // 管理员拥有所有权限
+      order_entry: [
+        PERMISSIONS.ORDER_CREATE,
+        PERMISSIONS.ORDER_EDIT,
+        PERMISSIONS.ORDER_MARK_URGENT,
+        PERMISSIONS.ORDER_VIEW_ALL,
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_ASSIGN,
+        PERMISSIONS.ORDER_DELETE,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_GLOBAL,
+        PERMISSIONS.APPROVAL_VIEW_HISTORY,
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.CONFIG_CUSTOMER,
+        PERMISSIONS.EXPORT_ORDER_TOTAL,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      ltl_cs: [
+        PERMISSIONS.ORDER_CREATE,
+        PERMISSIONS.ORDER_EDIT,
+        PERMISSIONS.ORDER_MARK_URGENT,
+        PERMISSIONS.ORDER_VIEW_ALL,
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_ASSIGN,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_GLOBAL,
+        PERMISSIONS.KANBAN_LTL,
+        PERMISSIONS.LTL_INQUIRY,
+        PERMISSIONS.APPROVAL_VIEW_HISTORY,
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.EXPORT_FLEET_LTL,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      chain_cs: [
+        PERMISSIONS.ORDER_CREATE,
+        PERMISSIONS.ORDER_EDIT,
+        PERMISSIONS.ORDER_MARK_URGENT,
+        PERMISSIONS.ORDER_VIEW_ALL,
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_GLOBAL,
+        PERMISSIONS.KANBAN_LTL,
+        PERMISSIONS.APPROVAL_VIEW_HISTORY,
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.EXPORT_CUSTOMER_LEDGER,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      ltl_dispatcher: [
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_LTL,
+        PERMISSIONS.LTL_INQUIRY,
+        PERMISSIONS.LTL_ARRANGE_SHIP,
+        PERMISSIONS.LTL_UPLOAD_POD,
+        PERMISSIONS.LTL_OCR_VERIFY,
+        PERMISSIONS.APPROVAL_VIEW_HISTORY,
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.POD_MARK_SENT,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      outsource_dispatcher: [
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_OUTSOURCE,
+        PERMISSIONS.OUTSOURCE_VEHICLE_INPUT,
+        PERMISSIONS.OUTSOURCE_SUBMIT_QUOTE,
+        PERMISSIONS.APPROVAL_VIEW_HISTORY,
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.POD_MARK_SENT,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      fleet_dispatcher: [
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_SELF,
+        PERMISSIONS.FLEET_DISPATCH,
+        PERMISSIONS.FLEET_VEHICLE_STATUS,
+        PERMISSIONS.CONFIG_VEHICLE_DRIVER,
+        PERMISSIONS.EXPORT_FLEET_LTL,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      field_manager: [
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.KANBAN_SELF,
+        PERMISSIONS.FLEET_VEHICLE_STATUS,
+        PERMISSIONS.STATS_PERSONAL
+      ],
+      cs_manager: [
+        PERMISSIONS.ORDER_CREATE,
+        PERMISSIONS.ORDER_EDIT,
+        PERMISSIONS.ORDER_MARK_URGENT,
+        PERMISSIONS.ORDER_ADJUST,
+        PERMISSIONS.ORDER_VIEW_ALL,
+        PERMISSIONS.ORDER_VIEW_OWN,
+        PERMISSIONS.ORDER_ASSIGN,
+        PERMISSIONS.ORDER_HOLD_CANCEL,
+        PERMISSIONS.ORDER_UPDATE_STATUS,
+        PERMISSIONS.ORDER_DELETE,
+        PERMISSIONS.ORDER_ROLLBACK,
+        PERMISSIONS.KANBAN_GLOBAL,
+        PERMISSIONS.KANBAN_OUTSOURCE,
+        PERMISSIONS.KANBAN_SELF,
+        PERMISSIONS.KANBAN_LTL,
+        PERMISSIONS.OUTSOURCE_VEHICLE_INPUT,
+        PERMISSIONS.OUTSOURCE_SET_PRICE,
+        PERMISSIONS.FLEET_DISPATCH,
+        PERMISSIONS.LTL_INQUIRY,
+        PERMISSIONS.LTL_ARRANGE_SHIP,
+        PERMISSIONS.APPROVAL_EXECUTE,
+        PERMISSIONS.APPROVAL_VIEW_HISTORY,
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.POD_MARK_SENT,
+        PERMISSIONS.CONFIG_CUSTOMER,
+        PERMISSIONS.CONFIG_DISPATCHER_REGION,
+        PERMISSIONS.EXPORT_ORDER_TOTAL,
+        PERMISSIONS.EXPORT_OUTSOURCE,
+        PERMISSIONS.EXPORT_FLEET_LTL,
+        PERMISSIONS.EXPORT_CUSTOMER_LEDGER,
+        PERMISSIONS.FREIGHT_RATE_VIEW,
+        PERMISSIONS.FREIGHT_RATE_EXPORT,
+        PERMISSIONS.STATS_FULL,
+        PERMISSIONS.STATS_PERSONAL,
+        PERMISSIONS.LOG_VIEW
+      ],
+      finance_assistant: [
+        PERMISSIONS.POD_VIEW,
+        PERMISSIONS.POD_CONFIRM_RECEIVED,
+        PERMISSIONS.POD_REFUND_DEPOSIT,
+        PERMISSIONS.STATS_PERSONAL
+      ]
+    };
+    PERMISSION_LABELS = {};
+    for (const group of PERMISSION_GROUPS) {
+      for (const perm of group.permissions) {
+        PERMISSION_LABELS[perm.key] = perm.label;
+      }
+    }
+  }
+});
+
+// server/db.ts
+var db_exports = {};
+__export(db_exports, {
+  CONFIG_KEYS: () => CONFIG_KEYS,
+  DEFAULT_THRESHOLDS: () => DEFAULT_THRESHOLDS,
+  batchImportCargoTypes: () => batchImportCargoTypes,
+  batchImportCustomers: () => batchImportCustomers,
+  batchImportDepartments: () => batchImportDepartments,
+  batchImportDispatcherRegions: () => batchImportDispatcherRegions,
+  batchImportDrivers: () => batchImportDrivers,
+  batchImportFreightStations: () => batchImportFreightStations,
+  batchImportVehicles: () => batchImportVehicles,
+  batchImportWarehouses: () => batchImportWarehouses,
+  clearPermissionCache: () => clearPermissionCache,
+  createCargoType: () => createCargoType,
+  createCustomer: () => createCustomer,
+  createDepartment: () => createDepartment,
+  createDispatcherRegion: () => createDispatcherRegion,
+  createDriver: () => createDriver,
+  createFreightStation: () => createFreightStation,
+  createOperationLog: () => createOperationLog,
+  createUserWithPassword: () => createUserWithPassword,
+  createVehicle: () => createVehicle,
+  createWarehouse: () => createWarehouse,
+  deleteCargoType: () => deleteCargoType,
+  deleteCargoTypesBatch: () => deleteCargoTypesBatch,
+  deleteCustomer: () => deleteCustomer,
+  deleteCustomersBatch: () => deleteCustomersBatch,
+  deleteDepartment: () => deleteDepartment,
+  deleteDepartmentsBatch: () => deleteDepartmentsBatch,
+  deleteDispatcherRegion: () => deleteDispatcherRegion,
+  deleteDispatcherRegionsBatch: () => deleteDispatcherRegionsBatch,
+  deleteDriver: () => deleteDriver,
+  deleteDriversBatch: () => deleteDriversBatch,
+  deleteFreightStation: () => deleteFreightStation,
+  deleteFreightStationsBatch: () => deleteFreightStationsBatch,
+  deleteLtlInquiriesBatch: () => deleteLtlInquiriesBatch,
+  deleteLtlInquiry: () => deleteLtlInquiry,
+  deleteOrder: () => deleteOrder,
+  deleteOrdersBatch: () => deleteOrdersBatch,
+  deletePodRecord: () => deletePodRecord,
+  deletePodRecordsBatch: () => deletePodRecordsBatch,
+  deleteVehicle: () => deleteVehicle,
+  deleteVehiclesBatch: () => deleteVehiclesBatch,
+  deleteWarehouse: () => deleteWarehouse,
+  deleteWarehousesBatch: () => deleteWarehousesBatch,
+  findDriverByNamePhone: () => findDriverByNamePhone,
+  findDriverByPlate: () => findDriverByPlate,
+  findFreightStationByName: () => findFreightStationByName,
+  findVehicleByPlate: () => findVehicleByPlate,
+  getAllSystemConfigs: () => getAllSystemConfigs,
+  getCustomerById: () => getCustomerById,
+  getDb: () => getDb,
+  getRecentlyUsedStations: () => getRecentlyUsedStations,
+  getRecentlyUsedVehicles: () => getRecentlyUsedVehicles,
+  getStationAvgPrices: () => getStationAvgPrices,
+  getSystemConfig: () => getSystemConfig,
+  getSystemConfigWithDefault: () => getSystemConfigWithDefault,
+  getThreshold: () => getThreshold,
+  getUserById: () => getUserById,
+  getUserByOpenId: () => getUserByOpenId,
+  getUserByUsername: () => getUserByUsername,
+  getUserPermissions: () => getUserPermissions,
+  listCargoTypes: () => listCargoTypes,
+  listCustomers: () => listCustomers,
+  listDepartments: () => listDepartments,
+  listDispatcherRegions: () => listDispatcherRegions,
+  listDrivers: () => listDrivers,
+  listFreightStations: () => listFreightStations,
+  listRolePermissions: () => listRolePermissions,
+  listUsers: () => listUsers,
+  listVehicles: () => listVehicles,
+  listWarehouses: () => listWarehouses,
+  saveRolePermissions: () => saveRolePermissions,
+  searchVehiclesByPlatePrefix: () => searchVehiclesByPlatePrefix,
+  updateCargoType: () => updateCargoType,
+  updateCustomer: () => updateCustomer,
+  updateDepartment: () => updateDepartment,
+  updateDispatcherRegion: () => updateDispatcherRegion,
+  updateDriver: () => updateDriver,
+  updateFreightStation: () => updateFreightStation,
+  updateUserInfo: () => updateUserInfo,
+  updateUserOpenId: () => updateUserOpenId,
+  updateUserPassword: () => updateUserPassword,
+  updateUserRole: () => updateUserRole,
+  updateVehicle: () => updateVehicle,
+  updateWarehouse: () => updateWarehouse,
+  upsertSystemConfig: () => upsertSystemConfig,
+  upsertUser: () => upsertUser
+});
+import { eq, and, inArray, like, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/mysql2";
+async function getDb() {
+  if (!_db && process.env.DATABASE_URL) {
+    try {
+      _db = drizzle(process.env.DATABASE_URL);
+    } catch (error) {
+      console.warn("[Database] Failed to connect:", error);
+      _db = null;
+    }
+  }
+  return _db;
+}
+async function upsertUser(user) {
+  if (!user.openId) {
+    throw new Error("User openId is required for upsert");
+  }
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot upsert user: database not available");
+    return;
+  }
+  try {
+    const values = {
+      openId: user.openId
+    };
+    const updateSet = {};
+    const textFields = ["name", "email", "loginMethod", "phone"];
+    const assignNullable = (field) => {
+      const value = user[field];
+      if (value === void 0) return;
+      const normalized = value ?? null;
+      values[field] = normalized;
+      updateSet[field] = normalized;
+    };
+    textFields.forEach(assignNullable);
+    if (user.lastSignedIn !== void 0) {
+      values.lastSignedIn = user.lastSignedIn;
+      updateSet.lastSignedIn = user.lastSignedIn;
+    }
+    if (user.role !== void 0) {
+      values.role = user.role;
+      updateSet.role = user.role;
+    } else if (user.openId === ENV.ownerOpenId) {
+      values.role = "admin";
+      updateSet.role = "admin";
+    }
+    if (!values.lastSignedIn) {
+      values.lastSignedIn = /* @__PURE__ */ new Date();
+    }
+    if (Object.keys(updateSet).length === 0) {
+      updateSet.lastSignedIn = /* @__PURE__ */ new Date();
+    }
+    const existingUser = await getUserByOpenId(user.openId);
+    if (existingUser) {
+      await db.update(users).set(updateSet).where(eq(users.id, existingUser.id));
+      return;
+    }
+    await db.insert(users).values(values);
+  } catch (error) {
+    console.error("[Database] Failed to upsert user:", error);
+    throw error;
+  }
+}
+async function getUserByOpenId(openId) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot get user: database not available");
+    return void 0;
+  }
+  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  return result.length > 0 ? result[0] : void 0;
+}
+async function getUserPermissions(role) {
+  const now = Date.now();
+  const cached = permissionCache.get(role);
+  if (cached && cached.expiry > now) {
+    return cached.perms;
+  }
+  const db = await getDb();
+  if (!db) {
+    return DEFAULT_ROLE_PERMISSIONS[role] ?? [];
+  }
+  try {
+    const rows = await db.select().from(rolePermissions).where(eq(rolePermissions.role, role));
+    if (rows.length === 0) {
+      const defaults = DEFAULT_ROLE_PERMISSIONS[role] ?? [];
+      permissionCache.set(role, { perms: defaults, expiry: now + CACHE_TTL });
+      return defaults;
+    }
+    const perms = rows.filter((r) => r.allowed).map((r) => r.permissionKey);
+    permissionCache.set(role, { perms, expiry: now + CACHE_TTL });
+    return perms;
+  } catch (error) {
+    console.warn("[Permission] Failed to query permissions, using defaults:", error);
+    return DEFAULT_ROLE_PERMISSIONS[role] ?? [];
+  }
+}
+function clearPermissionCache() {
+  permissionCache.clear();
+}
+async function listCustomers(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(customers).where(eq(customers.isActive, true));
+  }
+  return db.select().from(customers);
+}
+async function getCustomerById(id) {
+  const db = await getDb();
+  if (!db) return void 0;
+  const rows = await db.select().from(customers).where(eq(customers.id, id)).limit(1);
+  return rows[0];
+}
+async function createCustomer(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(customers).values(data);
+  return result[0].insertId;
+}
+async function updateCustomer(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(customers).set(data).where(eq(customers.id, id));
+}
+async function listWarehouses(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(warehouses).where(eq(warehouses.isActive, true));
+  }
+  return db.select().from(warehouses);
+}
+async function createWarehouse(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(warehouses).values(data);
+  return result[0].insertId;
+}
+async function updateWarehouse(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(warehouses).set(data).where(eq(warehouses.id, id));
+}
+async function listFreightStations(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(freightStations).where(eq(freightStations.isActive, true));
+  }
+  return db.select().from(freightStations);
+}
+async function findFreightStationByName(name) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(freightStations).where(eq(freightStations.name, name)).limit(1);
+  return rows[0] ?? null;
+}
+async function createFreightStation(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(freightStations).values(data);
+  return result[0].insertId;
+}
+async function updateFreightStation(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(freightStations).set(data).where(eq(freightStations.id, id));
+}
+async function listVehicles(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(vehicles).where(eq(vehicles.isActive, true));
+  }
+  return db.select().from(vehicles);
+}
+async function createVehicle(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(vehicles).values(data);
+  return result[0].insertId;
+}
+async function updateVehicle(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(vehicles).set(data).where(eq(vehicles.id, id));
+}
+async function findVehicleByPlate(plateNumber) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(vehicles).where(eq(vehicles.plateNumber, plateNumber)).limit(1);
+  return rows[0] || null;
+}
+async function searchVehiclesByPlatePrefix(prefix, limit = 10) {
+  const db = await getDb();
+  if (!db) return [];
+  const vehicleRows = await db.select().from(vehicles).where(and(like(vehicles.plateNumber, `${prefix}%`), eq(vehicles.isActive, true))).limit(limit);
+  const results = [];
+  for (const v of vehicleRows) {
+    let driver = null;
+    if (v.driverId) {
+      const driverRows = await db.select().from(drivers).where(eq(drivers.id, v.driverId)).limit(1);
+      driver = driverRows[0] || null;
+    }
+    if (!driver) {
+      const driverRows = await db.select().from(drivers).where(eq(drivers.commonPlateNumber, v.plateNumber)).limit(1);
+      driver = driverRows[0] || null;
+    }
+    results.push({
+      plateNumber: v.plateNumber,
+      vehicleType: v.vehicleType,
+      model: v.model,
+      capacity: v.capacity,
+      driverName: driver?.name || null,
+      driverPhone: driver?.phone || null,
+      recentUseCount: 0
+    });
+  }
+  return results;
+}
+async function getRecentlyUsedVehicles(limit = 5) {
+  const db = await getDb();
+  if (!db) return [];
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1e3);
+  const rows = await db.execute(sql`
+    SELECT plateNumber, COUNT(*) as useCount
+    FROM orders
+    WHERE plateNumber IS NOT NULL AND plateNumber != ''
+      AND updatedAt >= ${thirtyDaysAgo}
+    GROUP BY plateNumber
+    ORDER BY useCount DESC
+    LIMIT ${limit}
+  `);
+  const recentPlates = [];
+  for (const row of rows[0] || []) {
+    recentPlates.push({ plateNumber: row.plateNumber, useCount: Number(row.useCount) });
+  }
+  const results = [];
+  for (const rp of recentPlates) {
+    const vRows = await db.select().from(vehicles).where(eq(vehicles.plateNumber, rp.plateNumber)).limit(1);
+    const v = vRows[0];
+    if (!v) continue;
+    let driver = null;
+    if (v.driverId) {
+      const driverRows = await db.select().from(drivers).where(eq(drivers.id, v.driverId)).limit(1);
+      driver = driverRows[0] || null;
+    }
+    if (!driver) {
+      const driverRows = await db.select().from(drivers).where(eq(drivers.commonPlateNumber, v.plateNumber)).limit(1);
+      driver = driverRows[0] || null;
+    }
+    results.push({
+      plateNumber: v.plateNumber,
+      vehicleType: v.vehicleType,
+      model: v.model,
+      capacity: v.capacity,
+      driverName: driver?.name || null,
+      driverPhone: driver?.phone || null,
+      recentUseCount: rp.useCount
+    });
+  }
+  return results;
+}
+async function findDriverByPlate(plateNumber) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(drivers).where(eq(drivers.commonPlateNumber, plateNumber)).limit(1);
+  return rows[0] || null;
+}
+async function findDriverByNamePhone(name, phone) {
+  const db = await getDb();
+  if (!db) return null;
+  const conditions = [eq(drivers.name, name)];
+  if (phone) conditions.push(eq(drivers.phone, phone));
+  const rows = await db.select().from(drivers).where(and(...conditions)).limit(1);
+  return rows[0] || null;
+}
+async function listDrivers(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(drivers).where(eq(drivers.isActive, true));
+  }
+  return db.select().from(drivers);
+}
+async function createDriver(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(drivers).values(data);
+  return result[0].insertId;
+}
+async function updateDriver(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(drivers).set(data).where(eq(drivers.id, id));
+}
+async function listDepartments(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(departments).where(eq(departments.isActive, true));
+  }
+  return db.select().from(departments);
+}
+async function createDepartment(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(departments).values(data);
+  return result[0].insertId;
+}
+async function updateDepartment(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(departments).set(data).where(eq(departments.id, id));
+}
+async function listCargoTypes(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(cargoTypes).where(eq(cargoTypes.isActive, true));
+  }
+  return db.select().from(cargoTypes);
+}
+async function createCargoType(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(cargoTypes).values(data);
+  return result[0].insertId;
+}
+async function updateCargoType(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(cargoTypes).set(data).where(eq(cargoTypes.id, id));
+}
+async function listDispatcherRegions() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: dispatcherRegions.id,
+    dispatcherId: dispatcherRegions.dispatcherId,
+    province: dispatcherRegions.province,
+    city: dispatcherRegions.city,
+    priority: dispatcherRegions.priority,
+    createdAt: dispatcherRegions.createdAt,
+    dispatcherName: users.name
+  }).from(dispatcherRegions).leftJoin(users, eq(dispatcherRegions.dispatcherId, users.id));
+  return rows;
+}
+async function createDispatcherRegion(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const result = await db.insert(dispatcherRegions).values(data);
+  return result[0].insertId;
+}
+async function updateDispatcherRegion(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(dispatcherRegions).set(data).where(eq(dispatcherRegions.id, id));
+}
+async function deleteDispatcherRegion(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(dispatcherRegions).where(eq(dispatcherRegions.id, id));
+}
+async function listUsers(activeOnly = true) {
+  const db = await getDb();
+  if (!db) return [];
+  if (activeOnly) {
+    return db.select().from(users).where(eq(users.isActive, true));
+  }
+  return db.select().from(users);
+}
+async function updateUserRole(id, role) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(users).set({ role }).where(eq(users.id, id));
+}
+async function updateUserInfo(id, data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(users).set(data).where(eq(users.id, id));
+}
+async function getUserByUsername(username) {
+  const db = await getDb();
+  if (!db) return void 0;
+  const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+  return result.length > 0 ? result[0] : void 0;
+}
+async function createUserWithPassword(data) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const openId = `local_${data.username}_${Date.now()}`;
+  const result = await db.insert(users).values({
+    openId,
+    username: data.username,
+    passwordHash: data.passwordHash,
+    name: data.name,
+    role: data.role,
+    phone: data.phone ?? null,
+    region: data.region ?? null,
+    loginMethod: "password"
+  });
+  return result[0].insertId;
+}
+async function updateUserPassword(id, passwordHash) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(users).set({ passwordHash }).where(eq(users.id, id));
+}
+async function updateUserOpenId(id, openId) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.update(users).set({ openId }).where(eq(users.id, id));
+}
+async function getUserById(id) {
+  const db = await getDb();
+  if (!db) return void 0;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result.length > 0 ? result[0] : void 0;
+}
+async function listRolePermissions(role) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rolePermissions).where(eq(rolePermissions.role, role));
+}
+async function saveRolePermissions(role, permissions, updatedBy) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(rolePermissions).where(eq(rolePermissions.role, role));
+  if (permissions.length > 0) {
+    await db.insert(rolePermissions).values(
+      permissions.map((p) => ({
+        role,
+        permissionKey: p.key,
+        allowed: p.allowed,
+        updatedBy
+      }))
+    );
+  }
+  clearPermissionCache();
+}
+async function createOperationLog(data) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Log] Cannot write log: database not available");
+    return;
+  }
+  try {
+    await db.insert(operationLogs).values(data);
+  } catch (error) {
+    console.error("[Log] Failed to write operation log:", error);
+  }
+}
+async function deleteOrder(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(orders).where(eq(orders.id, id));
+  return true;
+}
+async function deleteOrdersBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return 0;
+  await db.delete(orders).where(inArray(orders.id, ids));
+  return ids.length;
+}
+async function deleteCustomer(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(customers).where(eq(customers.id, id));
+}
+async function deleteCustomersBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(customers).where(inArray(customers.id, ids));
+}
+async function deleteWarehouse(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(warehouses).where(eq(warehouses.id, id));
+}
+async function deleteWarehousesBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(warehouses).where(inArray(warehouses.id, ids));
+}
+async function deleteFreightStation(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(freightStations).where(eq(freightStations.id, id));
+}
+async function deleteFreightStationsBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(freightStations).where(inArray(freightStations.id, ids));
+}
+async function deleteVehicle(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(vehicles).where(eq(vehicles.id, id));
+}
+async function deleteVehiclesBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(vehicles).where(inArray(vehicles.id, ids));
+}
+async function deleteDriver(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(drivers).where(eq(drivers.id, id));
+}
+async function deleteDriversBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(drivers).where(inArray(drivers.id, ids));
+}
+async function deleteDepartment(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(departments).where(eq(departments.id, id));
+}
+async function deleteDepartmentsBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(departments).where(inArray(departments.id, ids));
+}
+async function deleteCargoType(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(cargoTypes).where(eq(cargoTypes.id, id));
+}
+async function deleteCargoTypesBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(cargoTypes).where(inArray(cargoTypes.id, ids));
+}
+async function deletePodRecord(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(podRecords).where(eq(podRecords.id, id));
+}
+async function deletePodRecordsBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(podRecords).where(inArray(podRecords.id, ids));
+}
+async function deleteLtlInquiry(id) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  await db.delete(ltlInquiries).where(eq(ltlInquiries.id, id));
+}
+async function deleteLtlInquiriesBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(ltlInquiries).where(inArray(ltlInquiries.id, ids));
+}
+async function batchImportCustomers(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(customers).values(items);
+  return { count: items.length };
+}
+async function batchImportWarehouses(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(warehouses).values(items);
+  return { count: items.length };
+}
+async function batchImportFreightStations(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(freightStations).values(items);
+  return { count: items.length };
+}
+async function batchImportVehicles(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(vehicles).values(items);
+  return { count: items.length };
+}
+async function batchImportDrivers(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(drivers).values(items);
+  return { count: items.length };
+}
+async function batchImportDepartments(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(departments).values(items);
+  return { count: items.length };
+}
+async function batchImportCargoTypes(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(cargoTypes).values(items);
+  return { count: items.length };
+}
+async function batchImportDispatcherRegions(items) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (items.length === 0) return { count: 0 };
+  await db.insert(dispatcherRegions).values(items);
+  return { count: items.length };
+}
+async function deleteDispatcherRegionsBatch(ids) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  if (ids.length === 0) return;
+  await db.delete(dispatcherRegions).where(inArray(dispatcherRegions.id, ids));
+}
+async function getSystemConfig(key) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(systemConfig).where(eq(systemConfig.configKey, key)).limit(1);
+  return rows[0]?.configValue ?? null;
+}
+async function getSystemConfigWithDefault(key, defaultValue) {
+  const val = await getSystemConfig(key);
+  return val ?? defaultValue;
+}
+async function getAllSystemConfigs() {
+  const db = await getDb();
+  if (!db) return [];
+  return await db.select().from(systemConfig).orderBy(systemConfig.configKey);
+}
+async function upsertSystemConfig(key, value, description, userId, userName) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const existing = await db.select().from(systemConfig).where(eq(systemConfig.configKey, key)).limit(1);
+  if (existing.length > 0) {
+    await db.update(systemConfig).set({
+      configValue: value,
+      description,
+      updatedById: userId,
+      updatedByName: userName
+    }).where(eq(systemConfig.configKey, key));
+  } else {
+    await db.insert(systemConfig).values({
+      configKey: key,
+      configValue: value,
+      description,
+      updatedById: userId,
+      updatedByName: userName
+    });
+  }
+}
+async function getThreshold(key) {
+  const val = await getSystemConfig(key);
+  const defaultVal = DEFAULT_THRESHOLDS[key] ?? "5";
+  const num = val ? parseInt(val, 10) : parseInt(defaultVal, 10);
+  return isNaN(num) ? parseInt(defaultVal, 10) : num;
+}
+async function getRecentlyUsedStations(limit = 8) {
+  const db = await getDb();
+  if (!db) return [];
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1e3);
+  const rows = await db.execute(sql`
+    SELECT freightStationName, COUNT(*) as useCount
+    FROM orders
+    WHERE freightStationName IS NOT NULL AND freightStationName != ''
+      AND updatedAt >= ${thirtyDaysAgo}
+    GROUP BY freightStationName
+    ORDER BY useCount DESC
+    LIMIT ${limit}
+  `);
+  const results = [];
+  for (const row of rows[0] || []) {
+    const stationRows = await db.select().from(freightStations).where(eq(freightStations.name, row.freightStationName)).limit(1);
+    const station = stationRows[0];
+    results.push({
+      name: row.freightStationName,
+      useCount: Number(row.useCount),
+      phone: station?.phone || null
+    });
+  }
+  return results;
+}
+async function getStationAvgPrices(stationNames) {
+  const db = await getDb();
+  if (!db || stationNames.length === 0) return [];
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1e3);
+  const inClause = stationNames.map((n) => sql`${n}`).reduce((acc, cur, i) => i === 0 ? cur : sql`${acc}, ${cur}`);
+  const rows = await db.execute(sql`
+    SELECT 
+      freightStationName,
+      COUNT(*) as orderCount,
+      AVG(
+        (COALESCE(CAST(actualFreight AS DECIMAL(14,4)), 0) 
+         - COALESCE(CAST(extraFee AS DECIMAL(14,4)), 0) 
+         - COALESCE(CAST(deliveryFee AS DECIMAL(14,4)), 0))
+        / NULLIF(CAST(weight AS DECIMAL(10,3)), 0)
+      ) as avgNetUnitPrice
+    FROM orders
+    WHERE freightStationName IN (${inClause})
+      AND updatedAt >= ${ninetyDaysAgo}
+      AND weight IS NOT NULL AND CAST(weight AS DECIMAL(10,3)) > 0
+      AND actualFreight IS NOT NULL AND CAST(actualFreight AS DECIMAL(14,4)) > 0
+      AND businessType = 'ltl'
+    GROUP BY freightStationName
+  `);
+  const results = [];
+  for (const row of rows[0] || []) {
+    const price = Number(row.avgNetUnitPrice);
+    if (!isNaN(price) && price > 0) {
+      results.push({
+        stationName: row.freightStationName,
+        avgNetUnitPrice: Math.round(price * 100) / 100,
+        // 保留2位小数
+        orderCount: Number(row.orderCount)
+      });
+    }
+  }
+  return results;
+}
+var _db, permissionCache, CACHE_TTL, CONFIG_KEYS, DEFAULT_THRESHOLDS;
+var init_db = __esm({
+  "server/db.ts"() {
+    "use strict";
+    init_schema();
+    init_env();
+    init_schema();
+    init_permissions();
+    _db = null;
+    permissionCache = /* @__PURE__ */ new Map();
+    CACHE_TTL = 5 * 60 * 1e3;
+    CONFIG_KEYS = {
+      BACKLOG_YELLOW: "backlog_threshold_yellow",
+      BACKLOG_ORANGE: "backlog_threshold_orange",
+      BACKLOG_RED: "backlog_threshold_red",
+      POD_OVERDUE_YELLOW: "pod_overdue_threshold_yellow",
+      POD_OVERDUE_ORANGE: "pod_overdue_threshold_orange",
+      POD_OVERDUE_RED: "pod_overdue_threshold_red"
+    };
+    DEFAULT_THRESHOLDS = {
+      [CONFIG_KEYS.BACKLOG_YELLOW]: "5",
+      [CONFIG_KEYS.BACKLOG_ORANGE]: "10",
+      [CONFIG_KEYS.BACKLOG_RED]: "15",
+      [CONFIG_KEYS.POD_OVERDUE_YELLOW]: "5",
+      [CONFIG_KEYS.POD_OVERDUE_ORANGE]: "15",
+      [CONFIG_KEYS.POD_OVERDUE_RED]: "15"
+    };
+  }
+});
+
+// server/_core/cookies.ts
+var cookies_exports = {};
+__export(cookies_exports, {
+  getSessionCookieOptions: () => getSessionCookieOptions
+});
+function isSecureRequest(req) {
+  if (req.protocol === "https") return true;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  if (!forwardedProto) return false;
+  const protoList = Array.isArray(forwardedProto) ? forwardedProto : forwardedProto.split(",");
+  return protoList.some((proto) => proto.trim().toLowerCase() === "https");
+}
+function getSessionCookieOptions(req) {
+  const secure = isSecureRequest(req);
+  return {
+    httpOnly: true,
+    path: "/",
+    // Use "lax" for compatibility with Safari ITP
+    // "none" + Secure is blocked by Safari's Intelligent Tracking Prevention
+    sameSite: "lax",
+    secure
+  };
+}
+var init_cookies = __esm({
+  "server/_core/cookies.ts"() {
+    "use strict";
+  }
+});
+
+// shared/_core/errors.ts
+var HttpError, ForbiddenError;
+var init_errors = __esm({
+  "shared/_core/errors.ts"() {
+    "use strict";
+    HttpError = class extends Error {
+      constructor(statusCode, message) {
+        super(message);
+        this.statusCode = statusCode;
+        this.name = "HttpError";
+      }
+    };
+    ForbiddenError = (msg) => new HttpError(403, msg);
+  }
+});
+
+// server/_core/sdk.ts
+var sdk_exports = {};
+__export(sdk_exports, {
+  sdk: () => sdk
+});
+import axios from "axios";
+import { parse as parseCookieHeader } from "cookie";
+import { SignJWT, jwtVerify } from "jose";
+var isNonEmptyString, EXCHANGE_TOKEN_PATH, GET_USER_INFO_PATH, GET_USER_INFO_WITH_JWT_PATH, OAuthService, createOAuthHttpClient, SDKServer, sdk;
+var init_sdk = __esm({
+  "server/_core/sdk.ts"() {
+    "use strict";
+    init_const();
+    init_errors();
+    init_db();
+    init_env();
+    isNonEmptyString = (value) => typeof value === "string" && value.length > 0;
+    EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
+    GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
+    GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfoWithJwt`;
+    OAuthService = class {
+      constructor(client) {
+        this.client = client;
+        console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
+        if (!ENV.oAuthServerUrl) {
+          console.error(
+            "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
+          );
+        }
+      }
+      decodeState(state) {
+        const redirectUri = atob(state);
+        return redirectUri;
+      }
+      async getTokenByCode(code, state) {
+        const payload = {
+          clientId: ENV.appId,
+          grantType: "authorization_code",
+          code,
+          redirectUri: this.decodeState(state)
+        };
+        const { data } = await this.client.post(
+          EXCHANGE_TOKEN_PATH,
+          payload
+        );
+        return data;
+      }
+      async getUserInfoByToken(token) {
+        const { data } = await this.client.post(
+          GET_USER_INFO_PATH,
+          {
+            accessToken: token.accessToken
+          }
+        );
+        return data;
+      }
+    };
+    createOAuthHttpClient = () => axios.create({
+      baseURL: ENV.oAuthServerUrl,
+      timeout: AXIOS_TIMEOUT_MS
+    });
+    SDKServer = class {
+      client;
+      oauthService;
+      constructor(client = createOAuthHttpClient()) {
+        this.client = client;
+        this.oauthService = new OAuthService(this.client);
+      }
+      deriveLoginMethod(platforms, fallback) {
+        if (fallback && fallback.length > 0) return fallback;
+        if (!Array.isArray(platforms) || platforms.length === 0) return null;
+        const set = new Set(
+          platforms.filter((p) => typeof p === "string")
+        );
+        if (set.has("REGISTERED_PLATFORM_EMAIL")) return "email";
+        if (set.has("REGISTERED_PLATFORM_GOOGLE")) return "google";
+        if (set.has("REGISTERED_PLATFORM_APPLE")) return "apple";
+        if (set.has("REGISTERED_PLATFORM_MICROSOFT") || set.has("REGISTERED_PLATFORM_AZURE"))
+          return "microsoft";
+        if (set.has("REGISTERED_PLATFORM_GITHUB")) return "github";
+        const first = Array.from(set)[0];
+        return first ? first.toLowerCase() : null;
+      }
+      /**
+       * Exchange OAuth authorization code for access token
+       * @example
+       * const tokenResponse = await sdk.exchangeCodeForToken(code, state);
+       */
+      async exchangeCodeForToken(code, state) {
+        return this.oauthService.getTokenByCode(code, state);
+      }
+      /**
+       * Get user information using access token
+       * @example
+       * const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
+       */
+      async getUserInfo(accessToken) {
+        const data = await this.oauthService.getUserInfoByToken({
+          accessToken
+        });
+        const loginMethod = this.deriveLoginMethod(
+          data?.platforms,
+          data?.platform ?? data.platform ?? null
+        );
+        return {
+          ...data,
+          platform: loginMethod,
+          loginMethod
+        };
+      }
+      parseCookies(cookieHeader) {
+        if (!cookieHeader) {
+          return /* @__PURE__ */ new Map();
+        }
+        const parsed = parseCookieHeader(cookieHeader);
+        return new Map(Object.entries(parsed));
+      }
+      getSessionSecret() {
+        const secret = ENV.cookieSecret;
+        return new TextEncoder().encode(secret);
+      }
+      /**
+       * Create a session token for a Manus user openId
+       * @example
+       * const sessionToken = await sdk.createSessionToken(userInfo.openId);
+       */
+      async createSessionToken(openId, options = {}) {
+        return this.signSession(
+          {
+            openId,
+            appId: ENV.appId || "yongan-local",
+            name: options.name || ""
+          },
+          options
+        );
+      }
+      async signSession(payload, options = {}) {
+        const issuedAt = Date.now();
+        const expiresInMs = options.expiresInMs ?? ONE_YEAR_MS;
+        const expirationSeconds = Math.floor((issuedAt + expiresInMs) / 1e3);
+        const secretKey = this.getSessionSecret();
+        return new SignJWT({
+          openId: payload.openId,
+          appId: payload.appId,
+          name: payload.name
+        }).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setExpirationTime(expirationSeconds).sign(secretKey);
+      }
+      async verifySession(cookieValue) {
+        if (!cookieValue) {
+          console.warn("[Auth] Missing session cookie");
+          return null;
+        }
+        try {
+          const secretKey = this.getSessionSecret();
+          const { payload } = await jwtVerify(cookieValue, secretKey, {
+            algorithms: ["HS256"]
+          });
+          const { openId, appId, name } = payload;
+          if (!isNonEmptyString(openId) || !isNonEmptyString(name)) {
+            console.warn("[Auth] Session payload missing required fields");
+            return null;
+          }
+          return {
+            openId,
+            appId,
+            name
+          };
+        } catch (error) {
+          console.warn("[Auth] Session verification failed", String(error));
+          return null;
+        }
+      }
+      async getUserInfoWithJwt(jwtToken) {
+        const payload = {
+          jwtToken,
+          projectId: ENV.appId
+        };
+        const { data } = await this.client.post(
+          GET_USER_INFO_WITH_JWT_PATH,
+          payload
+        );
+        const loginMethod = this.deriveLoginMethod(
+          data?.platforms,
+          data?.platform ?? data.platform ?? null
+        );
+        return {
+          ...data,
+          platform: loginMethod,
+          loginMethod
+        };
+      }
+      async authenticateRequest(req) {
+        let tokenValue;
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith("Bearer ")) {
+          tokenValue = authHeader.slice(7);
+        }
+        if (!tokenValue) {
+          const cookies = this.parseCookies(req.headers.cookie);
+          tokenValue = cookies.get(COOKIE_NAME);
+        }
+        const session = await this.verifySession(tokenValue);
+        if (!session) {
+          throw ForbiddenError("Invalid session cookie");
+        }
+        const sessionUserId = session.openId;
+        const signedInAt = /* @__PURE__ */ new Date();
+        let user = await getUserByOpenId(sessionUserId);
+        if (!user) {
+          try {
+            const userInfo = await this.getUserInfoWithJwt(tokenValue ?? "");
+            await upsertUser({
+              openId: userInfo.openId,
+              name: userInfo.name || null,
+              email: userInfo.email ?? null,
+              loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+              lastSignedIn: signedInAt
+            });
+            user = await getUserByOpenId(userInfo.openId);
+          } catch (error) {
+            console.error("[Auth] Failed to sync user from OAuth:", error);
+            throw ForbiddenError("Failed to sync user info");
+          }
+        }
+        if (!user) {
+          throw ForbiddenError("User not found");
+        }
+        await upsertUser({
+          openId: user.openId,
+          lastSignedIn: signedInAt
+        });
+        return user;
+      }
+    };
+    sdk = new SDKServer();
+  }
+});
+
+// server/_core/notification.ts
+import { TRPCError } from "@trpc/server";
+async function notifyOwner(payload) {
+  const { title, content } = validatePayload(payload);
+  if (!ENV.forgeApiUrl) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Notification service URL is not configured."
+    });
+  }
+  if (!ENV.forgeApiKey) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Notification service API key is not configured."
+    });
+  }
+  const endpoint = buildEndpointUrl(ENV.forgeApiUrl);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${ENV.forgeApiKey}`,
+        "content-type": "application/json",
+        "connect-protocol-version": "1"
+      },
+      body: JSON.stringify({ title, content })
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      console.warn(
+        `[Notification] Failed to notify owner (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`
+      );
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[Notification] Error calling notification service:", error);
+    return false;
+  }
+}
+var TITLE_MAX_LENGTH, CONTENT_MAX_LENGTH, trimValue, isNonEmptyString2, buildEndpointUrl, validatePayload;
+var init_notification = __esm({
+  "server/_core/notification.ts"() {
+    "use strict";
+    init_env();
+    TITLE_MAX_LENGTH = 1200;
+    CONTENT_MAX_LENGTH = 2e4;
+    trimValue = (value) => value.trim();
+    isNonEmptyString2 = (value) => typeof value === "string" && value.trim().length > 0;
+    buildEndpointUrl = (baseUrl) => {
+      const normalizedBase = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+      return new URL(
+        "webdevtoken.v1.WebDevService/SendNotification",
+        normalizedBase
+      ).toString();
+    };
+    validatePayload = (input) => {
+      if (!isNonEmptyString2(input.title)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Notification title is required."
+        });
+      }
+      if (!isNonEmptyString2(input.content)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Notification content is required."
+        });
+      }
+      const title = trimValue(input.title);
+      const content = trimValue(input.content);
+      if (title.length > TITLE_MAX_LENGTH) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Notification title must be at most ${TITLE_MAX_LENGTH} characters.`
+        });
+      }
+      if (content.length > CONTENT_MAX_LENGTH) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Notification content must be at most ${CONTENT_MAX_LENGTH} characters.`
+        });
+      }
+      return { title, content };
+    };
+  }
+});
+
+// server/podOverdueChecker.ts
+var podOverdueChecker_exports = {};
+__export(podOverdueChecker_exports, {
+  DEFAULT_POD_THRESHOLDS: () => DEFAULT_POD_THRESHOLDS,
+  DEFAULT_SELF_POD_THRESHOLDS: () => DEFAULT_SELF_POD_THRESHOLDS,
+  LEVEL_LABELS: () => LEVEL_LABELS,
+  checkOverduePods: () => checkOverduePods,
+  getBusinessOverdueLevel: () => getBusinessOverdueLevel,
+  getOverdueBaseAt: () => getOverdueBaseAt,
+  getOverdueDaysFromBase: () => getOverdueDaysFromBase,
+  getOverdueLevel: () => getOverdueLevel,
+  getOverdueList: () => getOverdueList,
+  getRolesForLevel: () => getRolesForLevel,
+  loadPodThresholds: () => loadPodThresholds,
+  startPodOverdueChecker: () => startPodOverdueChecker,
+  stopPodOverdueChecker: () => stopPodOverdueChecker
+});
+import { eq as eq4, or as or2, and as and4, inArray as inArray4, gte as gte2 } from "drizzle-orm";
+async function loadPodThresholds() {
+  try {
+    const [yellow, orange, red] = await Promise.all([
+      getThreshold(CONFIG_KEYS.POD_OVERDUE_YELLOW),
+      getThreshold(CONFIG_KEYS.POD_OVERDUE_ORANGE),
+      getThreshold(CONFIG_KEYS.POD_OVERDUE_RED)
+    ]);
+    return { yellow, orange, red };
+  } catch {
+    return { ...DEFAULT_POD_THRESHOLDS };
+  }
+}
+function getOverdueLevel(overdueDays, thresholds = DEFAULT_POD_THRESHOLDS) {
+  if (overdueDays >= thresholds.red) return "red";
+  if (overdueDays >= thresholds.orange) return "orange";
+  if (overdueDays >= 0) return "yellow";
+  return null;
+}
+function getRolesForLevel(level) {
+  switch (level) {
+    case "yellow":
+      return ["dispatcher"];
+    // 相应调度员
+    case "orange":
+      return ["dispatcher", "finance_assistant"];
+    // 调度员 + 财务助理
+    case "red":
+      return ["dispatcher", "finance_assistant", "cs_manager"];
+    // 调度员 + 财务助理 + 外请主管
+    default:
+      return [];
+  }
+}
+function getOverdueBaseAt(pod, order) {
+  if (order?.businessType === "self") {
+    if (!order.signedDate) return null;
+    const signedAt = new Date(order.signedDate);
+    return Number.isNaN(signedAt.getTime()) ? null : signedAt;
+  }
+  if (!pod.createdAt) return null;
+  const createdAt = new Date(pod.createdAt);
+  return Number.isNaN(createdAt.getTime()) ? null : createdAt;
+}
+function getOverdueDaysFromBase(baseAt, now = Date.now()) {
+  if (!baseAt) return null;
+  return Math.floor((now - baseAt.getTime()) / DAY_MS);
+}
+function getBusinessOverdueLevel(overdueDays, businessType, thresholds = DEFAULT_POD_THRESHOLDS, selfThresholds = DEFAULT_SELF_POD_THRESHOLDS) {
+  if (businessType === "self") {
+    if (overdueDays >= selfThresholds.red) return "red";
+    if (overdueDays >= selfThresholds.orange) return "orange";
+    if (overdueDays >= selfThresholds.yellow) return "yellow";
+    return null;
+  }
+  return getOverdueLevel(overdueDays, thresholds);
+}
+async function checkOverduePods() {
+  const result = {
+    notified: 0,
+    yellow: 0,
+    orange: 0,
+    red: 0,
+    items: [],
+    notifications: []
+  };
+  try {
+    const db = await getDb();
+    if (!db) {
+      console.log("[PodOverdueChecker] \u6570\u636E\u5E93\u4E0D\u53EF\u7528\uFF0C\u8DF3\u8FC7\u68C0\u67E5");
+      return result;
+    }
+    const allPending = await db.select().from(podRecords).where(
+      and4(
+        eq4(podRecords.podOwnership, "current_order"),
+        or2(
+          eq4(podRecords.originalStatus, "pending"),
+          eq4(podRecords.originalStatus, "sent")
+        )
+      )
+    );
+    if (allPending.length === 0) {
+      console.log("[PodOverdueChecker] \u6CA1\u6709\u5F85\u56DE\u6536\u7684\u56DE\u5355");
+      return result;
+    }
+    const now = Date.now();
+    const orderIds = Array.from(new Set(allPending.map((p) => p.orderId)));
+    const orderRows = orderIds.length > 0 ? await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      systemCode: orders.systemCode,
+      customerName: orders.customerName,
+      driverName: orders.driverName,
+      plateNumber: orders.plateNumber,
+      originCity: orders.originCity,
+      destinationCity: orders.destinationCity,
+      assignedDispatcherId: orders.assignedDispatcherId,
+      businessType: orders.businessType,
+      signedDate: orders.signedDate
+    }).from(orders).where(and4(
+      inArray4(orders.id, orderIds),
+      eq4(orders.podOwnership, "current_order")
+    )) : [];
+    const orderMap = new Map(orderRows.map((o) => [o.id, o]));
+    const overdueItems = [];
+    for (const pod of allPending) {
+      const order = orderMap.get(pod.orderId) || null;
+      if (!order) continue;
+      const overdueBaseAt = getOverdueBaseAt(pod, order);
+      const overdueDays = getOverdueDaysFromBase(overdueBaseAt, now);
+      if (overdueDays === null) continue;
+      const level = getBusinessOverdueLevel(overdueDays, order?.businessType || null);
+      if (!level) continue;
+      overdueItems.push({
+        podId: pod.id,
+        orderId: pod.orderId,
+        overdueDays,
+        level,
+        orderNumber: order?.orderNumber || null,
+        systemCode: order?.systemCode || null,
+        customerName: order?.customerName || null,
+        driverName: order?.driverName || null,
+        plateNumber: order?.plateNumber || null,
+        originCity: order?.originCity || null,
+        destinationCity: order?.destinationCity || null,
+        assignedDispatcherId: order?.assignedDispatcherId || null,
+        businessType: order?.businessType || null,
+        signedDate: order?.signedDate || null,
+        overdueBaseAt
+      });
+    }
+    if (overdueItems.length === 0) {
+      console.log("[PodOverdueChecker] \u6CA1\u6709\u8D85\u671F\u56DE\u5355");
+      return result;
+    }
+    const yellowItems = overdueItems.filter((i) => i.level === "yellow");
+    const orangeItems = overdueItems.filter((i) => i.level === "orange");
+    const redItems = overdueItems.filter((i) => i.level === "red");
+    result.yellow = yellowItems.length;
+    result.orange = orangeItems.length;
+    result.red = redItems.length;
+    result.items = overdueItems;
+    console.log(`[PodOverdueChecker] \u53D1\u73B0\u8D85\u671F\u56DE\u5355: \u9EC4\u8272${yellowItems.length}\u4E2A, \u6A59\u8272${orangeItems.length}\u4E2A, \u7EA2\u8272${redItems.length}\u4E2A`);
+    const podIds = overdueItems.map((i) => i.podId);
+    const minCutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1e3);
+    const recentNotifications = podIds.length > 0 ? await db.select().from(overdueNotifications).where(
+      and4(
+        inArray4(overdueNotifications.podId, podIds),
+        gte2(overdueNotifications.sentAt, minCutoff)
+      )
+    ) : [];
+    const notifiedSet = /* @__PURE__ */ new Map();
+    for (const n of recentNotifications) {
+      const key = `${n.podId}_${n.level}_${n.recipientRole}`;
+      const existing = notifiedSet.get(key);
+      if (!existing || new Date(n.sentAt) > existing) {
+        notifiedSet.set(key, new Date(n.sentAt));
+      }
+    }
+    const shouldPushFast = (podId, level, recipientRole) => {
+      const config = LEVEL_LABELS[level];
+      const intervalMs = config.pushIntervalDays * 24 * 60 * 60 * 1e3;
+      const cutoffTime = Date.now() - intervalMs;
+      const key = `${podId}_${level}_${recipientRole}`;
+      const lastSent = notifiedSet.get(key);
+      if (!lastSent) return true;
+      return lastSent.getTime() < cutoffTime;
+    };
+    const financeUsers = await db.select({ id: users.id, name: users.name, username: users.username }).from(users).where(and4(eq4(users.role, "finance_assistant"), eq4(users.isActive, true)));
+    const csManagerUsers = await db.select({ id: users.id, name: users.name, username: users.username }).from(users).where(and4(eq4(users.role, "cs_manager"), eq4(users.isActive, true)));
+    const notificationStats = {
+      yellow: {},
+      orange: {},
+      red: {}
+    };
+    const toInsert = [];
+    for (const item of overdueItems) {
+      const roles = getRolesForLevel(item.level);
+      for (const role of roles) {
+        if (role === "dispatcher") {
+          if (!item.assignedDispatcherId) continue;
+          const roleKey = `dispatcher_${item.assignedDispatcherId}`;
+          if (shouldPushFast(item.podId, item.level, roleKey)) {
+            toInsert.push({
+              podId: item.podId,
+              orderId: item.orderId,
+              level: item.level,
+              recipientRole: roleKey,
+              recipientUserId: item.assignedDispatcherId,
+              overdueDays: item.overdueDays
+            });
+            notificationStats[item.level][roleKey] = (notificationStats[item.level][roleKey] || 0) + 1;
+            result.notified++;
+          }
+        } else if (role === "finance_assistant") {
+          for (const fu of financeUsers) {
+            const roleKey = `finance_${fu.id}`;
+            if (shouldPushFast(item.podId, item.level, roleKey)) {
+              toInsert.push({
+                podId: item.podId,
+                orderId: item.orderId,
+                level: item.level,
+                recipientRole: roleKey,
+                recipientUserId: fu.id,
+                overdueDays: item.overdueDays
+              });
+              notificationStats[item.level][roleKey] = (notificationStats[item.level][roleKey] || 0) + 1;
+              result.notified++;
+            }
+          }
+        } else if (role === "cs_manager") {
+          for (const cm of csManagerUsers) {
+            const roleKey = `cs_manager_${cm.id}`;
+            if (shouldPushFast(item.podId, item.level, roleKey)) {
+              toInsert.push({
+                podId: item.podId,
+                orderId: item.orderId,
+                level: item.level,
+                recipientRole: roleKey,
+                recipientUserId: cm.id,
+                overdueDays: item.overdueDays
+              });
+              notificationStats[item.level][roleKey] = (notificationStats[item.level][roleKey] || 0) + 1;
+              result.notified++;
+            }
+          }
+        }
+      }
+    }
+    if (toInsert.length > 0) {
+      const batchSize = 50;
+      for (let i = 0; i < toInsert.length; i += batchSize) {
+        const batch = toInsert.slice(i, i + batchSize);
+        await db.insert(overdueNotifications).values(batch);
+      }
+    }
+    for (const [level, roleMap] of Object.entries(notificationStats)) {
+      for (const [role, count8] of Object.entries(roleMap)) {
+        if (count8 > 0) {
+          result.notifications.push({ level, role, count: count8 });
+        }
+      }
+    }
+    if (result.notified > 0) {
+      try {
+        const buildSection = (items, config) => {
+          if (items.length === 0) return "";
+          const lines = items.sort((a, b) => b.overdueDays - a.overdueDays).slice(0, 15).map((item) => {
+            const orderNo = item.orderNumber || item.systemCode || `#${item.orderId}`;
+            const customer = item.customerName || "\u672A\u77E5\u5BA2\u6237";
+            const route = `${item.originCity || "?"} \u2192 ${item.destinationCity || "?"}`;
+            return `  ${config.emoji} ${orderNo}\uFF08${customer}\uFF0C${route}\uFF09\u8D85\u671F ${item.overdueDays} \u5929`;
+          });
+          return `
+\u3010${config.label}\u3011\u5171 ${items.length} \u4E2A\uFF1A
+${lines.join("\n")}${items.length > 15 ? `
+  ...\u53CA\u5176\u4ED6 ${items.length - 15} \u4E2A` : ""}`;
+        };
+        const title = redItems.length > 0 ? `\u{1F6A8} \u7D27\u6025\uFF1A${redItems.length} \u4E2A\u56DE\u5355\u8D85\u671F\u226515\u5929\u672A\u56DE\u6536` : orangeItems.length > 0 ? `\u26A0\uFE0F \u8B66\u544A\uFF1A${orangeItems.length} \u4E2A\u56DE\u5355\u8D85\u671F5-15\u5929\u672A\u56DE\u6536` : `\u{1F7E1} \u63D0\u9192\uFF1A${yellowItems.length} \u4E2A\u56DE\u5355\u8D85\u671F\u22645\u5929\u672A\u56DE\u6536`;
+        const content = `\u56DE\u5355\u8D85\u671F\u5206\u7EA7\u63D0\u9192\u6C47\u603B\uFF1A${buildSection(redItems, LEVEL_LABELS.red)}${buildSection(orangeItems, LEVEL_LABELS.orange)}${buildSection(yellowItems, LEVEL_LABELS.yellow)}
+
+\u5171 ${overdueItems.length} \u4E2A\u8D85\u671F\u56DE\u5355\uFF0C\u5DF2\u5411\u76F8\u5173\u4EBA\u5458\u63A8\u9001 ${result.notified} \u6761\u901A\u77E5\u3002`;
+        await notifyOwner({ title, content });
+        console.log(`[PodOverdueChecker] \u6C47\u603B\u901A\u77E5\u5DF2\u53D1\u9001`);
+      } catch (e) {
+        console.warn("[PodOverdueChecker] \u6C47\u603B\u901A\u77E5\u53D1\u9001\u5931\u8D25:", e);
+      }
+    }
+    console.log(`[PodOverdueChecker] \u5B8C\u6210\u68C0\u67E5\uFF0C\u5171\u63A8\u9001 ${result.notified} \u6761\u901A\u77E5`);
+    return result;
+  } catch (error) {
+    console.error("[PodOverdueChecker] \u68C0\u67E5\u5931\u8D25:", error);
+    return result;
+  }
+}
+async function getOverdueList(overdueDays = 0, businessType) {
+  try {
+    const db = await getDb();
+    if (!db) return [];
+    const allPending = await db.select().from(podRecords).where(
+      and4(
+        eq4(podRecords.podOwnership, "current_order"),
+        or2(
+          eq4(podRecords.originalStatus, "pending"),
+          eq4(podRecords.originalStatus, "sent")
+        )
+      )
+    );
+    const now = Date.now();
+    const thresholdMs = overdueDays * DAY_MS;
+    const allOrderIds = Array.from(new Set(allPending.map((p) => p.orderId)));
+    if (allOrderIds.length === 0) return [];
+    const orderConditions = [
+      inArray4(orders.id, allOrderIds),
+      eq4(orders.podOwnership, "current_order")
+    ];
+    if (businessType) {
+      orderConditions.push(eq4(orders.businessType, businessType));
+    }
+    const orderRows = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      systemCode: orders.systemCode,
+      customerName: orders.customerName,
+      driverName: orders.driverName,
+      originCity: orders.originCity,
+      destinationCity: orders.destinationCity,
+      assignedDispatcherId: orders.assignedDispatcherId,
+      plateNumber: orders.plateNumber,
+      businessType: orders.businessType,
+      signedDate: orders.signedDate
+    }).from(orders).where(and4(...orderConditions));
+    const orderMap = new Map(orderRows.map((o) => [o.id, o]));
+    const filteredPods = allPending.filter((pod) => {
+      const order = orderMap.get(pod.orderId) || null;
+      if (!order) return false;
+      const overdueBaseAt = getOverdueBaseAt(pod, order);
+      if (!overdueBaseAt) return false;
+      return now - overdueBaseAt.getTime() > thresholdMs;
+    });
+    if (filteredPods.length === 0) return [];
+    const items = filteredPods.map((pod) => {
+      const order = orderMap.get(pod.orderId) || null;
+      const overdueBaseAt = getOverdueBaseAt(pod, order);
+      const days = getOverdueDaysFromBase(overdueBaseAt, now);
+      const level = days === null ? null : getBusinessOverdueLevel(days, order?.businessType || null);
+      return {
+        podId: pod.id,
+        orderId: pod.orderId,
+        overdueDays: days ?? 0,
+        level,
+        orderNumber: order?.orderNumber || null,
+        systemCode: order?.systemCode || null,
+        customerName: order?.customerName || null,
+        driverName: order?.driverName || null,
+        plateNumber: order?.plateNumber || null,
+        originCity: order?.originCity || null,
+        destinationCity: order?.destinationCity || null,
+        assignedDispatcherId: order?.assignedDispatcherId || null,
+        businessType: order?.businessType || null,
+        signedDate: order?.signedDate || null,
+        overdueBaseAt
+      };
+    }).filter((i) => i.level !== null).filter((i) => orderMap.has(i.orderId));
+    return items.sort((a, b) => b.overdueDays - a.overdueDays);
+  } catch (error) {
+    console.error("[PodOverdueChecker] getOverdueList\u5931\u8D25:", error);
+    return [];
+  }
+}
+function startPodOverdueChecker() {
+  console.log(`[PodOverdueChecker] \u5206\u7EA7\u901A\u77E5\u5B9A\u65F6\u4EFB\u52A1\u5DF2\u542F\u52A8\uFF08\u9EC4\u8272\u22645\u5929/\u6A59\u82725-15\u5929/\u7EA2\u8272\u226515\u5929\uFF09`);
+  setTimeout(() => {
+    checkOverduePods();
+  }, INITIAL_DELAY_MS);
+  intervalId = setInterval(() => {
+    checkOverduePods();
+  }, CHECK_INTERVAL_MS);
+}
+function stopPodOverdueChecker() {
+  if (intervalId) {
+    clearInterval(intervalId);
+    intervalId = null;
+    console.log("[PodOverdueChecker] \u5B9A\u65F6\u4EFB\u52A1\u5DF2\u505C\u6B62");
+  }
+}
+var LEVEL_LABELS, DEFAULT_POD_THRESHOLDS, DEFAULT_SELF_POD_THRESHOLDS, DAY_MS, CHECK_INTERVAL_MS, INITIAL_DELAY_MS, intervalId;
+var init_podOverdueChecker = __esm({
+  "server/podOverdueChecker.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_notification();
+    LEVEL_LABELS = {
+      yellow: { label: "\u9EC4\u8272\u9884\u8B66", emoji: "\u{1F7E1}", pushIntervalDays: 3 },
+      orange: { label: "\u6A59\u8272\u8B66\u544A", emoji: "\u{1F7E0}", pushIntervalDays: 1 },
+      red: { label: "\u7EA2\u8272\u7D27\u6025", emoji: "\u{1F534}", pushIntervalDays: 1 }
+    };
+    DEFAULT_POD_THRESHOLDS = { yellow: 5, orange: 15, red: 15 };
+    DEFAULT_SELF_POD_THRESHOLDS = { yellow: 3, orange: 7, red: 15 };
+    DAY_MS = 24 * 60 * 60 * 1e3;
+    CHECK_INTERVAL_MS = DAY_MS;
+    INITIAL_DELAY_MS = 60 * 1e3;
+    intervalId = null;
+  }
+});
+
+// server/dispatcherBacklogChecker.ts
+var dispatcherBacklogChecker_exports = {};
+__export(dispatcherBacklogChecker_exports, {
+  BACKLOG_LABELS: () => BACKLOG_LABELS,
+  DEFAULT_BACKLOG_THRESHOLDS: () => DEFAULT_BACKLOG_THRESHOLDS,
+  checkDispatcherBacklog: () => checkDispatcherBacklog,
+  getBacklogLevel: () => getBacklogLevel,
+  getNotifyTargets: () => getNotifyTargets,
+  loadThresholds: () => loadThresholds,
+  startBacklogChecker: () => startBacklogChecker,
+  stopBacklogChecker: () => stopBacklogChecker
+});
+import { eq as eq9, and as and9, or as or5, inArray as inArray8, isNotNull as isNotNull2, count as count7 } from "drizzle-orm";
+async function loadThresholds() {
+  try {
+    const [yellow, orange, red] = await Promise.all([
+      getThreshold(CONFIG_KEYS.BACKLOG_YELLOW),
+      getThreshold(CONFIG_KEYS.BACKLOG_ORANGE),
+      getThreshold(CONFIG_KEYS.BACKLOG_RED)
+    ]);
+    return { yellow, orange, red };
+  } catch {
+    return { ...DEFAULT_BACKLOG_THRESHOLDS };
+  }
+}
+function getBacklogLevel(backlogCount, thresholds = DEFAULT_BACKLOG_THRESHOLDS) {
+  if (backlogCount >= thresholds.red) return "red";
+  if (backlogCount >= thresholds.orange) return "orange";
+  if (backlogCount >= thresholds.yellow) return "yellow";
+  return null;
+}
+function getNotifyTargets(level) {
+  switch (level) {
+    case "yellow":
+      return ["owner"];
+    // 仅通知项目所有者
+    case "orange":
+      return ["owner", "cs_manager"];
+    // 通知所有者 + 客服经理
+    case "red":
+      return ["owner", "cs_manager", "admin"];
+    // 通知所有者 + 客服经理 + 管理员
+    default:
+      return [];
+  }
+}
+function shouldNotify(dispatcherId, level) {
+  const key = `${dispatcherId}_${level}`;
+  const lastTime = lastNotifyMap.get(key);
+  if (!lastTime) return true;
+  return Date.now() - lastTime >= NOTIFY_COOLDOWN_MS;
+}
+function recordNotify(dispatcherId, level) {
+  const key = `${dispatcherId}_${level}`;
+  lastNotifyMap.set(key, Date.now());
+}
+async function checkDispatcherBacklog(overrideThresholds) {
+  const result = {
+    checked: 0,
+    alerted: 0,
+    yellow: 0,
+    orange: 0,
+    red: 0,
+    items: []
+  };
+  try {
+    const db = await getDb();
+    if (!db) {
+      console.log("[BacklogChecker] \u6570\u636E\u5E93\u4E0D\u53EF\u7528\uFF0C\u8DF3\u8FC7\u68C0\u67E5");
+      return result;
+    }
+    const dispatcherRows = await db.select({
+      id: users.id,
+      name: users.name,
+      role: users.role
+    }).from(users).where(
+      and9(
+        or5(
+          eq9(users.role, "ltl_dispatcher"),
+          eq9(users.role, "outsource_dispatcher"),
+          eq9(users.role, "fleet_dispatcher")
+        ),
+        eq9(users.isActive, true)
+      )
+    );
+    if (dispatcherRows.length === 0) {
+      console.log("[BacklogChecker] \u6CA1\u6709\u6D3B\u8DC3\u8C03\u5EA6\u5458\uFF0C\u8DF3\u8FC7\u68C0\u67E5");
+      return result;
+    }
+    const thresholds = overrideThresholds ?? await loadThresholds();
+    result.checked = dispatcherRows.length;
+    const dIds = dispatcherRows.map((d) => d.id);
+    const pendingStatuses = [
+      "pending_price",
+      "pending_approval",
+      "pending_vehicle",
+      "pending_dispatch",
+      "pending_inquiry",
+      "inquiry_confirmed"
+    ];
+    const backlogRows = await db.select({
+      dispatcherId: orders.assignedDispatcherId,
+      backlogCount: count7()
+    }).from(orders).where(
+      and9(
+        inArray8(orders.assignedDispatcherId, dIds),
+        isNotNull2(orders.assignedDispatcherId),
+        inArray8(orders.status, pendingStatuses)
+      )
+    ).groupBy(orders.assignedDispatcherId);
+    const backlogMap = new Map(backlogRows.map((r) => [r.dispatcherId, Number(r.backlogCount)]));
+    const alertItems = [];
+    for (const d of dispatcherRows) {
+      const backlog = backlogMap.get(d.id) || 0;
+      const level = getBacklogLevel(backlog, thresholds);
+      if (!level) continue;
+      const roleLabel = d.role === "ltl_dispatcher" ? "\u96F6\u62C5" : d.role === "outsource_dispatcher" ? "\u5916\u8BF7" : d.role === "fleet_dispatcher" ? "\u8F66\u961F" : "\u8C03\u5EA6";
+      alertItems.push({
+        dispatcherId: d.id,
+        dispatcherName: d.name || `\u8C03\u5EA6\u5458${d.id}`,
+        role: d.role,
+        roleLabel,
+        backlogCount: backlog,
+        level
+      });
+    }
+    if (alertItems.length === 0) {
+      console.log("[BacklogChecker] \u6240\u6709\u8C03\u5EA6\u5458\u79EF\u538B\u6B63\u5E38\uFF0C\u65E0\u9700\u9884\u8B66");
+      return result;
+    }
+    alertItems.sort((a, b) => b.backlogCount - a.backlogCount);
+    result.items = alertItems;
+    const yellowItems = alertItems.filter((i) => i.level === "yellow");
+    const orangeItems = alertItems.filter((i) => i.level === "orange");
+    const redItems = alertItems.filter((i) => i.level === "red");
+    result.yellow = yellowItems.length;
+    result.orange = orangeItems.length;
+    result.red = redItems.length;
+    console.log(`[BacklogChecker] \u53D1\u73B0\u79EF\u538B\u9884\u8B66: \u9EC4\u8272${yellowItems.length}\u4EBA, \u6A59\u8272${orangeItems.length}\u4EBA, \u7EA2\u8272${redItems.length}\u4EBA`);
+    const needNotifyItems = alertItems.filter(
+      (item) => shouldNotify(item.dispatcherId, item.level)
+    );
+    if (needNotifyItems.length === 0) {
+      console.log("[BacklogChecker] \u6240\u6709\u9884\u8B66\u5747\u5728\u51B7\u5374\u671F\u5185\uFF0C\u8DF3\u8FC7\u901A\u77E5");
+      return result;
+    }
+    const buildSection = (items, config) => {
+      if (items.length === 0) return "";
+      const lines = items.map(
+        (item) => `  ${config.emoji} ${item.dispatcherName}\uFF08${item.roleLabel}\uFF09\u79EF\u538B ${item.backlogCount} \u5355`
+      );
+      return `
+\u3010${config.label}\u3011\u5171 ${items.length} \u4EBA\uFF1A
+${lines.join("\n")}`;
+    };
+    const needNotifyRed = needNotifyItems.filter((i) => i.level === "red");
+    const needNotifyOrange = needNotifyItems.filter((i) => i.level === "orange");
+    const needNotifyYellow = needNotifyItems.filter((i) => i.level === "yellow");
+    const title = needNotifyRed.length > 0 ? `\u{1F6A8} \u7D27\u6025\uFF1A${needNotifyRed.length} \u540D\u8C03\u5EA6\u5458\u79EF\u538B\u2265${thresholds.red}\u5355` : needNotifyOrange.length > 0 ? `\u26A0\uFE0F \u8B66\u544A\uFF1A${needNotifyOrange.length} \u540D\u8C03\u5EA6\u5458\u79EF\u538B\u2265${thresholds.orange}\u5355` : `\u{1F4CB} \u63D0\u9192\uFF1A${needNotifyYellow.length} \u540D\u8C03\u5EA6\u5458\u79EF\u538B\u2265${thresholds.yellow}\u5355`;
+    const content = [
+      `\u8C03\u5EA6\u5458\u79EF\u538B\u9884\u8B66\u62A5\u544A\uFF08${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\uFF09`,
+      buildSection(needNotifyRed, BACKLOG_LABELS.red),
+      buildSection(needNotifyOrange, BACKLOG_LABELS.orange),
+      buildSection(needNotifyYellow, BACKLOG_LABELS.yellow),
+      `
+\u5171 ${needNotifyItems.length} \u4EBA\u9700\u8981\u5173\u6CE8\uFF0C\u8BF7\u53CA\u65F6\u534F\u8C03\u5206\u914D\u8BA2\u5355\u3002`
+    ].filter(Boolean).join("\n");
+    try {
+      await notifyOwner({ title, content });
+      for (const item of needNotifyItems) {
+        recordNotify(item.dispatcherId, item.level);
+      }
+      result.alerted = needNotifyItems.length;
+      console.log(`[BacklogChecker] \u9884\u8B66\u901A\u77E5\u5DF2\u53D1\u9001\uFF0C\u6D89\u53CA ${needNotifyItems.length} \u540D\u8C03\u5EA6\u5458`);
+    } catch (e) {
+      console.warn("[BacklogChecker] \u901A\u77E5\u53D1\u9001\u5931\u8D25:", e);
+    }
+    return result;
+  } catch (error) {
+    console.error("[BacklogChecker] \u68C0\u67E5\u5931\u8D25:", error);
+    return result;
+  }
+}
+function startBacklogChecker() {
+  console.log(`[BacklogChecker] \u79EF\u538B\u9884\u8B66\u5B9A\u65F6\u4EFB\u52A1\u5DF2\u542F\u52A8\uFF08\u9608\u503C\u4ECE\u6570\u636E\u5E93\u8BFB\u53D6\uFF0C\u6BCF2\u5C0F\u65F6\u68C0\u67E5\uFF09`);
+  setTimeout(() => {
+    checkDispatcherBacklog();
+  }, INITIAL_DELAY_MS2);
+  intervalId2 = setInterval(() => {
+    checkDispatcherBacklog();
+  }, CHECK_INTERVAL_MS2);
+}
+function stopBacklogChecker() {
+  if (intervalId2) {
+    clearInterval(intervalId2);
+    intervalId2 = null;
+    console.log("[BacklogChecker] \u5B9A\u65F6\u4EFB\u52A1\u5DF2\u505C\u6B62");
+  }
+}
+var BACKLOG_LABELS, DEFAULT_BACKLOG_THRESHOLDS, CHECK_INTERVAL_MS2, INITIAL_DELAY_MS2, NOTIFY_COOLDOWN_MS, lastNotifyMap, intervalId2;
+var init_dispatcherBacklogChecker = __esm({
+  "server/dispatcherBacklogChecker.ts"() {
+    "use strict";
+    init_db();
+    init_schema();
+    init_notification();
+    BACKLOG_LABELS = {
+      yellow: { label: "\u9EC4\u8272\u9884\u8B66", emoji: "\u{1F7E1}" },
+      orange: { label: "\u6A59\u8272\u9884\u8B66", emoji: "\u{1F7E0}" },
+      red: { label: "\u7EA2\u8272\u7D27\u6025", emoji: "\u{1F534}" }
+    };
+    DEFAULT_BACKLOG_THRESHOLDS = { yellow: 5, orange: 10, red: 15 };
+    CHECK_INTERVAL_MS2 = 2 * 60 * 60 * 1e3;
+    INITIAL_DELAY_MS2 = 2 * 60 * 1e3;
+    NOTIFY_COOLDOWN_MS = 24 * 60 * 60 * 1e3;
+    lastNotifyMap = /* @__PURE__ */ new Map();
+    intervalId2 = null;
+  }
+});
+
+// server/_core/index.ts
+import "dotenv/config";
+import express2 from "express";
+import { createServer } from "http";
+import net from "net";
+import { createExpressMiddleware } from "@trpc/server/adapters/express";
+
+// server/_core/oauth.ts
+init_const();
+init_db();
+init_cookies();
+init_sdk();
+function getQueryParam(req, key) {
+  const value = req.query[key];
+  return typeof value === "string" ? value : void 0;
+}
+function registerOAuthRoutes(app) {
+  app.get("/api/oauth/callback", async (req, res) => {
+    const code = getQueryParam(req, "code");
+    const state = getQueryParam(req, "state");
+    if (!code || !state) {
+      res.status(400).json({ error: "code and state are required" });
+      return;
+    }
+    try {
+      const tokenResponse = await sdk.exchangeCodeForToken(code, state);
+      const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
+      if (!userInfo.openId) {
+        res.status(400).json({ error: "openId missing from user info" });
+        return;
+      }
+      await upsertUser({
+        openId: userInfo.openId,
+        name: userInfo.name || null,
+        email: userInfo.email ?? null,
+        loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+        lastSignedIn: /* @__PURE__ */ new Date()
+      });
+      const sessionToken = await sdk.createSessionToken(userInfo.openId, {
+        name: userInfo.name || "",
+        expiresInMs: ONE_YEAR_MS
+      });
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.redirect(302, `/?auth_token=${encodeURIComponent(sessionToken)}`);
+    } catch (error) {
+      console.error("[OAuth] Callback failed", error);
+      res.status(500).json({ error: "OAuth callback failed" });
+    }
+  });
+}
+
+// server/_core/systemRouter.ts
+init_notification();
+import { z } from "zod";
+
+// server/_core/trpc.ts
+init_const();
+init_db();
+import { initTRPC, TRPCError as TRPCError2 } from "@trpc/server";
+import superjson from "superjson";
+var t = initTRPC.context().create({
+  transformer: superjson
+});
+var router = t.router;
+var publicProcedure = t.procedure;
+var requireUser = t.middleware(async (opts) => {
+  const { ctx, next } = opts;
+  if (!ctx.user) {
+    throw new TRPCError2({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+  return next({
+    ctx: {
+      ...ctx,
+      user: ctx.user
+    }
+  });
+});
+var protectedProcedure = t.procedure.use(requireUser);
+var adminProcedure = t.procedure.use(
+  t.middleware(async (opts) => {
+    const { ctx, next } = opts;
+    if (!ctx.user || ctx.user.role !== "admin") {
+      throw new TRPCError2({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+    }
+    return next({
+      ctx: {
+        ...ctx,
+        user: ctx.user
+      }
+    });
+  })
+);
+function permissionProcedure(requiredPermissions) {
+  const perms = Array.isArray(requiredPermissions) ? requiredPermissions : [requiredPermissions];
+  return protectedProcedure.use(
+    t.middleware(async ({ ctx, next }) => {
+      if (ctx.user.role === "admin") {
+        return next({ ctx });
+      }
+      const userPerms = await getUserPermissions(ctx.user.role);
+      const hasPermission = perms.some((p) => userPerms.includes(p));
+      if (!hasPermission) {
+        throw new TRPCError2({
+          code: "FORBIDDEN",
+          message: `\u6743\u9650\u4E0D\u8DB3\uFF0C\u9700\u8981\u4EE5\u4E0B\u6743\u9650\u4E4B\u4E00: ${perms.join(", ")}`
+        });
+      }
+      return next({ ctx });
+    })
+  );
+}
+
+// server/_core/systemRouter.ts
+var systemRouter = router({
+  health: publicProcedure.input(
+    z.object({
+      timestamp: z.number().min(0, "timestamp cannot be negative")
+    })
+  ).query(() => ({
+    ok: true
+  })),
+  notifyOwner: adminProcedure.input(
+    z.object({
+      title: z.string().min(1, "title is required"),
+      content: z.string().min(1, "content is required")
+    })
+  ).mutation(async ({ input }) => {
+    const delivered = await notifyOwner(input);
+    return {
+      success: delivered
+    };
+  })
+});
+
+// server/routers/auth.ts
+import { z as z2 } from "zod";
+import { TRPCError as TRPCError3 } from "@trpc/server";
+import bcrypt from "bcryptjs";
+init_const();
+init_cookies();
+init_sdk();
+init_db();
+var SALT_ROUNDS = 10;
+var authRouter = router({
+  // 获取当前用户信息
+  me: publicProcedure.query((opts) => opts.ctx.user),
+  // 用户名+密码登录
+  login: publicProcedure.input(z2.object({
+    username: z2.string().min(1, "\u8BF7\u8F93\u5165\u7528\u6237\u540D"),
+    password: z2.string().min(1, "\u8BF7\u8F93\u5165\u5BC6\u7801")
+  })).mutation(async ({ input, ctx }) => {
+    const user = await getUserByUsername(input.username);
+    if (!user) {
+      throw new TRPCError3({
+        code: "UNAUTHORIZED",
+        message: "\u7528\u6237\u540D\u6216\u5BC6\u7801\u9519\u8BEF"
+      });
+    }
+    if (!user.isActive) {
+      throw new TRPCError3({
+        code: "FORBIDDEN",
+        message: "\u8D26\u53F7\u5DF2\u88AB\u7981\u7528\uFF0C\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458"
+      });
+    }
+    if (!user.passwordHash) {
+      throw new TRPCError3({
+        code: "UNAUTHORIZED",
+        message: "\u8BE5\u8D26\u53F7\u672A\u8BBE\u7F6E\u5BC6\u7801\uFF0C\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458"
+      });
+    }
+    const isValid = await bcrypt.compare(input.password, user.passwordHash);
+    if (!isValid) {
+      throw new TRPCError3({
+        code: "UNAUTHORIZED",
+        message: "\u7528\u6237\u540D\u6216\u5BC6\u7801\u9519\u8BEF"
+      });
+    }
+    let openId = user.openId;
+    if (!openId) {
+      openId = `local_${user.id}_${Date.now()}`;
+      await updateUserOpenId(user.id, openId);
+    }
+    const sessionToken = await sdk.createSessionToken(openId, {
+      name: user.name || user.username || "",
+      expiresInMs: ONE_YEAR_MS
+    });
+    const cookieOptions = getSessionCookieOptions(ctx.req);
+    ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+    await upsertUser({
+      openId,
+      lastSignedIn: /* @__PURE__ */ new Date()
+    });
+    return {
+      success: true,
+      user: {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        username: user.username
+      }
+    };
+  }),
+  // 退出登录
+  logout: publicProcedure.mutation(({ ctx }) => {
+    const cookieOptions = getSessionCookieOptions(ctx.req);
+    ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+    return { success: true };
+  }),
+  // 修改自己的密码
+  changePassword: protectedProcedure.input(z2.object({
+    oldPassword: z2.string().min(1, "\u8BF7\u8F93\u5165\u65E7\u5BC6\u7801"),
+    newPassword: z2.string().min(6, "\u65B0\u5BC6\u7801\u81F3\u5C116\u4E2A\u5B57\u7B26")
+  })).mutation(async ({ input, ctx }) => {
+    const user = await getUserById(ctx.user.id);
+    if (!user || !user.passwordHash) {
+      throw new TRPCError3({
+        code: "BAD_REQUEST",
+        message: "\u5F53\u524D\u8D26\u53F7\u4E0D\u652F\u6301\u5BC6\u7801\u4FEE\u6539"
+      });
+    }
+    const isValid = await bcrypt.compare(input.oldPassword, user.passwordHash);
+    if (!isValid) {
+      throw new TRPCError3({
+        code: "UNAUTHORIZED",
+        message: "\u65E7\u5BC6\u7801\u9519\u8BEF"
+      });
+    }
+    const newHash = await bcrypt.hash(input.newPassword, SALT_ROUNDS);
+    await updateUserPassword(ctx.user.id, newHash);
+    return { success: true };
+  }),
+  // 管理员创建用户（含密码）
+  createUser: adminProcedure.input(z2.object({
+    username: z2.string().min(2, "\u7528\u6237\u540D\u81F3\u5C112\u4E2A\u5B57\u7B26").max(64, "\u7528\u6237\u540D\u6700\u591A64\u4E2A\u5B57\u7B26").regex(/^[a-zA-Z0-9_]+$/, "\u7528\u6237\u540D\u53EA\u80FD\u5305\u542B\u5B57\u6BCD\u3001\u6570\u5B57\u548C\u4E0B\u5212\u7EBF"),
+    password: z2.string().min(6, "\u5BC6\u7801\u81F3\u5C116\u4E2A\u5B57\u7B26"),
+    name: z2.string().min(1, "\u8BF7\u8F93\u5165\u59D3\u540D"),
+    role: z2.string(),
+    phone: z2.string().optional(),
+    region: z2.string().optional()
+  })).mutation(async ({ input }) => {
+    const existing = await getUserByUsername(input.username);
+    if (existing) {
+      throw new TRPCError3({
+        code: "CONFLICT",
+        message: "\u7528\u6237\u540D\u5DF2\u5B58\u5728"
+      });
+    }
+    const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
+    const id = await createUserWithPassword({
+      username: input.username,
+      passwordHash,
+      name: input.name,
+      role: input.role,
+      phone: input.phone,
+      region: input.region
+    });
+    return { id };
+  }),
+  // 管理员重置用户密码
+  resetPassword: adminProcedure.input(z2.object({
+    userId: z2.number(),
+    newPassword: z2.string().min(6, "\u5BC6\u7801\u81F3\u5C116\u4E2A\u5B57\u7B26")
+  })).mutation(async ({ input }) => {
+    const user = await getUserById(input.userId);
+    if (!user) {
+      throw new TRPCError3({
+        code: "NOT_FOUND",
+        message: "\u7528\u6237\u4E0D\u5B58\u5728"
+      });
+    }
+    const passwordHash = await bcrypt.hash(input.newPassword, SALT_ROUNDS);
+    await updateUserPassword(input.userId, passwordHash);
+    return { success: true };
+  })
+});
+
+// server/routers/config.ts
+import { z as z3 } from "zod";
+init_permissions();
+init_db();
+var customerRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listCustomers(input?.activeOnly ?? true);
+  }),
+  getById: protectedProcedure.input(z3.object({ id: z3.number() })).query(async ({ input }) => {
+    return getCustomerById(input.id);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_CUSTOMER).input(z3.object({
+    name: z3.string().min(1, "\u5BA2\u6237\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A"),
+    phone: z3.string().optional(),
+    salesperson: z3.string().optional(),
+    settlementType: z3.enum(["monthly", "cash", "collect"]).default("monthly"),
+    department: z3.string().optional(),
+    remarks: z3.string().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createCustomer(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "customer",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u5BA2\u6237: ${input.name}`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_CUSTOMER).input(z3.object({
+    id: z3.number(),
+    name: z3.string().min(1).optional(),
+    phone: z3.string().optional(),
+    salesperson: z3.string().optional(),
+    settlementType: z3.enum(["monthly", "cash", "collect"]).optional(),
+    department: z3.string().optional(),
+    remarks: z3.string().optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateCustomer(id, data);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "customer",
+      targetId: String(id),
+      changes: data,
+      description: `\u66F4\u65B0\u5BA2\u6237\u4FE1\u606F: ID=${id}`
+    });
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_CUSTOMER).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteCustomer(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "customer", targetId: String(input.id), description: `\u5220\u9664\u5BA2\u6237 ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_CUSTOMER).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteCustomersBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "customer", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u5BA2\u6237` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_CUSTOMER).input(z3.object({
+    items: z3.array(z3.object({
+      name: z3.string().min(1, "\u5BA2\u6237\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A"),
+      phone: z3.string().optional(),
+      salesperson: z3.string().optional(),
+      settlementType: z3.enum(["monthly", "cash", "collect"]).default("monthly"),
+      department: z3.string().optional(),
+      remarks: z3.string().optional()
+    })).min(1, "\u81F3\u5C11\u5BFC\u5165\u4E00\u6761\u6570\u636E")
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportCustomers(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "customer", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u5BA2\u6237` });
+    return { success: true, count: result.count };
+  })
+});
+var warehouseRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listWarehouses(input?.activeOnly ?? true);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    name: z3.string().min(1, "\u4ED3\u5E93\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A"),
+    city: z3.string().optional(),
+    address: z3.string().optional(),
+    phone: z3.string().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createWarehouse(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "warehouse",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u4ED3\u5E93: ${input.name}`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    id: z3.number(),
+    name: z3.string().min(1).optional(),
+    city: z3.string().optional(),
+    address: z3.string().optional(),
+    phone: z3.string().optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateWarehouse(id, data);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "warehouse",
+      targetId: String(id),
+      changes: data
+    });
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteWarehouse(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "warehouse", targetId: String(input.id), description: `\u5220\u9664\u4ED3\u5E93 ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteWarehousesBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "warehouse", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u4ED3\u5E93` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    items: z3.array(z3.object({
+      name: z3.string().min(1, "\u4ED3\u5E93\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A"),
+      city: z3.string().optional(),
+      address: z3.string().optional(),
+      phone: z3.string().optional()
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportWarehouses(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "warehouse", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u4ED3\u5E93` });
+    return { success: true, count: result.count };
+  })
+});
+var freightStationRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listFreightStations(input?.activeOnly ?? true);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    name: z3.string().min(1, "\u8D27\u7AD9\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A"),
+    address: z3.string().optional(),
+    phone: z3.string().optional(),
+    contactPerson: z3.string().optional(),
+    coverageArea: z3.string().optional(),
+    remarks: z3.string().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createFreightStation(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "freight_station",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u8D27\u7AD9: ${input.name}`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    id: z3.number(),
+    name: z3.string().min(1).optional(),
+    address: z3.string().optional(),
+    phone: z3.string().optional(),
+    contactPerson: z3.string().optional(),
+    coverageArea: z3.string().optional(),
+    remarks: z3.string().optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateFreightStation(id, data);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "freight_station",
+      targetId: String(id),
+      changes: data
+    });
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteFreightStation(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "freight_station", targetId: String(input.id), description: `\u5220\u9664\u8D27\u7AD9 ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteFreightStationsBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "freight_station", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u8D27\u7AD9` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    items: z3.array(z3.object({
+      name: z3.string().min(1, "\u8D27\u7AD9\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A"),
+      address: z3.string().optional(),
+      phone: z3.string().optional(),
+      contactPerson: z3.string().optional(),
+      coverageArea: z3.string().optional(),
+      remarks: z3.string().optional()
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportFreightStations(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "freight_station", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u8D27\u7AD9` });
+    return { success: true, count: result.count };
+  }),
+  getRecentlyUsed: protectedProcedure.input(z3.object({ limit: z3.number().default(8) }).optional()).query(async ({ input }) => {
+    return getRecentlyUsedStations(input?.limit ?? 8);
+  }),
+  getAvgPrices: protectedProcedure.input(z3.object({ stationNames: z3.array(z3.string()).min(1) })).query(async ({ input }) => {
+    return getStationAvgPrices(input.stationNames);
+  })
+});
+var vehicleRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listVehicles(input?.activeOnly ?? true);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({
+    plateNumber: z3.string().min(1, "\u8F66\u724C\u53F7\u4E0D\u80FD\u4E3A\u7A7A"),
+    vehicleType: z3.enum(["own", "outsource"]).default("own"),
+    model: z3.string().optional(),
+    capacity: z3.string().optional(),
+    driverId: z3.number().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createVehicle(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "vehicle",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u8F66\u8F86: ${input.plateNumber}`
+    });
+    return { id };
+  }),
+  // 根据车牌查找或创建车辆，并自动匹配司机
+  lookupByPlate: protectedProcedure.input(z3.object({
+    plateNumber: z3.string().min(1, "\u8F66\u724C\u53F7\u4E0D\u80FD\u4E3A\u7A7A")
+  })).mutation(async ({ input, ctx }) => {
+    let vehicle = await findVehicleByPlate(input.plateNumber);
+    let isNew = false;
+    if (!vehicle) {
+      const id = await createVehicle({
+        plateNumber: input.plateNumber,
+        vehicleType: "outsource"
+      });
+      vehicle = { id, plateNumber: input.plateNumber, vehicleType: "outsource", status: "available", isActive: true, createdAt: /* @__PURE__ */ new Date(), model: null, capacity: null, driverId: null };
+      isNew = true;
+      await createOperationLog({
+        userId: ctx.user.id,
+        userName: ctx.user.name ?? void 0,
+        action: "create",
+        targetType: "vehicle",
+        targetId: String(id),
+        changes: { plateNumber: input.plateNumber, vehicleType: "outsource" },
+        description: `\u8C03\u5EA6\u65F6\u81EA\u52A8\u521B\u5EFA\u8F66\u8F86: ${input.plateNumber}`
+      });
+    }
+    let driver = null;
+    if (vehicle.driverId) {
+      const allDrivers = await listDrivers(true);
+      driver = allDrivers.find((d) => d.id === vehicle.driverId) || null;
+    }
+    if (!driver) {
+      driver = await findDriverByPlate(input.plateNumber);
+    }
+    return {
+      vehicle,
+      driver: driver ? { name: driver.name, phone: driver.phone } : null,
+      isNew
+    };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({
+    id: z3.number(),
+    plateNumber: z3.string().min(1).optional(),
+    vehicleType: z3.enum(["own", "outsource"]).optional(),
+    model: z3.string().optional(),
+    capacity: z3.string().optional(),
+    driverId: z3.number().optional(),
+    status: z3.enum(["available", "in_transit", "maintenance", "inactive"]).optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateVehicle(id, data);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "vehicle",
+      targetId: String(id),
+      changes: data
+    });
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteVehicle(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "vehicle", targetId: String(input.id), description: `\u5220\u9664\u8F66\u8F86 ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteVehiclesBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "vehicle", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u8F66\u8F86` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({
+    items: z3.array(z3.object({
+      plateNumber: z3.string().min(1, "\u8F66\u724C\u53F7\u4E0D\u80FD\u4E3A\u7A7A"),
+      vehicleType: z3.enum(["own", "outsource"]).default("own"),
+      model: z3.string().optional(),
+      capacity: z3.string().optional()
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportVehicles(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "vehicle", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u8F66\u8F86` });
+    return { success: true, count: result.count };
+  }),
+  // 车牌号模糊搜索（自动补全）
+  searchByPlatePrefix: protectedProcedure.input(z3.object({
+    prefix: z3.string().min(1, "\u8BF7\u8F93\u5165\u8F66\u724C\u524D\u7F00"),
+    limit: z3.number().min(1).max(20).default(10)
+  })).query(async ({ input }) => {
+    return searchVehiclesByPlatePrefix(input.prefix, input.limit);
+  }),
+  // 获取最近30天常用车辆（按使用次数排序）
+  getRecentlyUsed: protectedProcedure.input(z3.object({
+    limit: z3.number().min(1).max(20).default(5)
+  }).optional()).query(async ({ input }) => {
+    return getRecentlyUsedVehicles(input?.limit ?? 5);
+  })
+});
+var driverRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listDrivers(input?.activeOnly ?? true);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({
+    name: z3.string().min(1, "\u53F8\u673A\u59D3\u540D\u4E0D\u80FD\u4E3A\u7A7A"),
+    phone: z3.string().optional(),
+    idCard: z3.string().optional(),
+    driverType: z3.enum(["own", "outsource"]).default("own"),
+    commonPlateNumber: z3.string().optional(),
+    depositAmount: z3.string().optional(),
+    remarks: z3.string().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createDriver(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "driver",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u53F8\u673A: ${input.name}`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({
+    id: z3.number(),
+    name: z3.string().min(1).optional(),
+    phone: z3.string().optional(),
+    idCard: z3.string().optional(),
+    driverType: z3.enum(["own", "outsource"]).optional(),
+    commonPlateNumber: z3.string().optional(),
+    depositAmount: z3.string().optional(),
+    depositStatus: z3.enum(["none", "paid", "refunded"]).optional(),
+    remarks: z3.string().optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateDriver(id, data);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "driver",
+      targetId: String(id),
+      changes: data
+    });
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteDriver(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "driver", targetId: String(input.id), description: `\u5220\u9664\u53F8\u673A ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteDriversBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "driver", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u53F8\u673A` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_VEHICLE_DRIVER).input(z3.object({
+    items: z3.array(z3.object({
+      name: z3.string().min(1, "\u53F8\u673A\u59D3\u540D\u4E0D\u80FD\u4E3A\u7A7A"),
+      phone: z3.string().optional(),
+      idCard: z3.string().optional(),
+      driverType: z3.enum(["own", "outsource"]).default("own"),
+      commonPlateNumber: z3.string().optional(),
+      depositAmount: z3.string().optional(),
+      remarks: z3.string().optional()
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportDrivers(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "driver", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u53F8\u673A` });
+    return { success: true, count: result.count };
+  })
+});
+var departmentRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listDepartments(input?.activeOnly ?? true);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    name: z3.string().min(1, "\u90E8\u95E8\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A")
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createDepartment(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "department",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u90E8\u95E8: ${input.name}`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    id: z3.number(),
+    name: z3.string().min(1).optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateDepartment(id, data);
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteDepartment(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "department", targetId: String(input.id), description: `\u5220\u9664\u90E8\u95E8 ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteDepartmentsBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "department", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u90E8\u95E8` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    items: z3.array(z3.object({
+      name: z3.string().min(1, "\u90E8\u95E8\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A")
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportDepartments(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "department", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u90E8\u95E8` });
+    return { success: true, count: result.count };
+  })
+});
+var cargoTypeRouter = router({
+  list: protectedProcedure.input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listCargoTypes(input?.activeOnly ?? true);
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    name: z3.string().min(1, "\u8D27\u7269\u7C7B\u578B\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A")
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createCargoType(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "cargo_type",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u8D27\u7269\u7C7B\u578B: ${input.name}`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    id: z3.number(),
+    name: z3.string().min(1).optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateCargoType(id, data);
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteCargoType(input.id);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "cargo_type", targetId: String(input.id), description: `\u5220\u9664\u8D27\u7269\u7C7B\u578B ID=${input.id}` });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteCargoTypesBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "cargo_type", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u8D27\u7269\u7C7B\u578B` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_WAREHOUSE).input(z3.object({
+    items: z3.array(z3.object({
+      name: z3.string().min(1, "\u8D27\u7269\u7C7B\u578B\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A")
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportCargoTypes(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "cargo_type", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u8D27\u7269\u7C7B\u578B` });
+    return { success: true, count: result.count };
+  })
+});
+var dispatcherRegionRouter = router({
+  list: protectedProcedure.query(async () => {
+    return listDispatcherRegions();
+  }),
+  create: permissionProcedure(PERMISSIONS.CONFIG_DISPATCHER_REGION).input(z3.object({
+    dispatcherId: z3.number(),
+    province: z3.string().min(1, "\u7701\u4EFD\u4E0D\u80FD\u4E3A\u7A7A"),
+    city: z3.string().optional(),
+    priority: z3.number().default(0)
+  })).mutation(async ({ input, ctx }) => {
+    const id = await createDispatcherRegion(input);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "create",
+      targetType: "dispatcher_region",
+      targetId: String(id),
+      changes: input,
+      description: `\u521B\u5EFA\u8C03\u5EA6\u5458\u533A\u57DF\u914D\u7F6E`
+    });
+    return { id };
+  }),
+  update: permissionProcedure(PERMISSIONS.CONFIG_DISPATCHER_REGION).input(z3.object({
+    id: z3.number(),
+    dispatcherId: z3.number().optional(),
+    province: z3.string().min(1).optional(),
+    city: z3.string().optional(),
+    priority: z3.number().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateDispatcherRegion(id, data);
+    return { success: true };
+  }),
+  delete: permissionProcedure(PERMISSIONS.CONFIG_DISPATCHER_REGION).input(z3.object({ id: z3.number() })).mutation(async ({ input, ctx }) => {
+    await deleteDispatcherRegion(input.id);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "delete",
+      targetType: "dispatcher_region",
+      targetId: String(input.id),
+      description: `\u5220\u9664\u8C03\u5EA6\u5458\u533A\u57DF\u914D\u7F6E`
+    });
+    return { success: true };
+  }),
+  batchDelete: permissionProcedure(PERMISSIONS.CONFIG_DISPATCHER_REGION).input(z3.object({ ids: z3.array(z3.number()).min(1) })).mutation(async ({ input, ctx }) => {
+    await deleteDispatcherRegionsBatch(input.ids);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "delete", targetType: "dispatcher_region", targetId: input.ids.join(","), description: `\u6279\u91CF\u5220\u9664 ${input.ids.length} \u4E2A\u533A\u57DF\u914D\u7F6E` });
+    return { success: true, count: input.ids.length };
+  }),
+  batchImport: permissionProcedure(PERMISSIONS.CONFIG_DISPATCHER_REGION).input(z3.object({
+    items: z3.array(z3.object({
+      dispatcherId: z3.number(),
+      province: z3.string().min(1, "\u7701\u4EFD\u4E0D\u80FD\u4E3A\u7A7A"),
+      city: z3.string().optional(),
+      priority: z3.number().default(0)
+    })).min(1)
+  })).mutation(async ({ input, ctx }) => {
+    const result = await batchImportDispatcherRegions(input.items);
+    await createOperationLog({ userId: ctx.user.id, userName: ctx.user.name ?? void 0, action: "create", targetType: "dispatcher_region", targetId: "batch", description: `\u6279\u91CF\u5BFC\u5165 ${result.count} \u4E2A\u533A\u57DF\u914D\u7F6E` });
+    return { success: true, count: result.count };
+  })
+});
+var userRouter = router({
+  list: permissionProcedure(PERMISSIONS.CONFIG_USER).input(z3.object({ activeOnly: z3.boolean().default(true) }).optional()).query(async ({ input }) => {
+    return listUsers(input?.activeOnly ?? true);
+  }),
+  updateRole: permissionProcedure(PERMISSIONS.CONFIG_USER).input(z3.object({
+    id: z3.number(),
+    role: z3.string()
+  })).mutation(async ({ input, ctx }) => {
+    await updateUserRole(input.id, input.role);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "user",
+      targetId: String(input.id),
+      changes: { role: input.role },
+      description: `\u66F4\u65B0\u7528\u6237\u89D2\u8272: ID=${input.id} -> ${input.role}`
+    });
+    return { success: true };
+  }),
+  updateInfo: permissionProcedure(PERMISSIONS.CONFIG_USER).input(z3.object({
+    id: z3.number(),
+    name: z3.string().optional(),
+    phone: z3.string().optional(),
+    region: z3.string().optional(),
+    isActive: z3.boolean().optional()
+  })).mutation(async ({ input, ctx }) => {
+    const { id, ...data } = input;
+    await updateUserInfo(id, data);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "user",
+      targetId: String(id),
+      changes: data
+    });
+    return { success: true };
+  })
+});
+var permissionRouter = router({
+  listForRole: permissionProcedure(PERMISSIONS.CONFIG_PERMISSION).input(z3.object({ role: z3.string() })).query(async ({ input }) => {
+    return listRolePermissions(input.role);
+  }),
+  save: permissionProcedure(PERMISSIONS.CONFIG_PERMISSION).input(z3.object({
+    role: z3.string(),
+    permissions: z3.array(z3.object({
+      key: z3.string(),
+      allowed: z3.boolean()
+    }))
+  })).mutation(async ({ input, ctx }) => {
+    await saveRolePermissions(input.role, input.permissions, ctx.user.id);
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? void 0,
+      action: "update",
+      targetType: "permission",
+      targetId: input.role,
+      changes: { permissionCount: input.permissions.filter((p) => p.allowed).length },
+      description: `\u66F4\u65B0\u89D2\u8272\u6743\u9650: ${input.role}`
+    });
+    return { success: true };
+  }),
+  // 获取当前用户的权限列表（任何已登录用户都可以调用）
+  myPermissions: protectedProcedure.query(async ({ ctx }) => {
+    return getUserPermissions(ctx.user.role);
+  })
+});
+var systemConfigRouter = router({
+  // 获取所有系统配置
+  list: adminProcedure.query(async () => {
+    return getAllSystemConfigs();
+  }),
+  // 获取单个配置值
+  get: protectedProcedure.input(z3.object({ key: z3.string() })).query(async ({ input }) => {
+    const val = await getSystemConfig(input.key);
+    return { key: input.key, value: val };
+  }),
+  // 获取所有预警阈值（含默认值兜底）
+  getThresholds: protectedProcedure.query(async () => {
+    const keys = Object.values(CONFIG_KEYS);
+    const results = {};
+    for (const key of keys) {
+      results[key] = await getThreshold(key);
+    }
+    return results;
+  }),
+  // 更新配置（仅管理员）
+  upsert: adminProcedure.input(z3.object({
+    key: z3.string().min(1),
+    value: z3.string(),
+    description: z3.string().nullable().optional()
+  })).mutation(async ({ ctx, input }) => {
+    await upsertSystemConfig(
+      input.key,
+      input.value,
+      input.description ?? null,
+      ctx.user.id,
+      ctx.user.name || ctx.user.username || "\u7BA1\u7406\u5458"
+    );
+    return { success: true };
+  }),
+  // 批量更新预警阈值
+  updateThresholds: adminProcedure.input(z3.object({
+    thresholds: z3.array(z3.object({
+      key: z3.string(),
+      value: z3.number().int().min(1, "\u9608\u503C\u5FC5\u987B\u5927\u4E8E0")
+    }))
+  })).mutation(async ({ ctx, input }) => {
+    for (const t2 of input.thresholds) {
+      await upsertSystemConfig(
+        t2.key,
+        String(t2.value),
+        null,
+        ctx.user.id,
+        ctx.user.name || ctx.user.username || "\u7BA1\u7406\u5458"
+      );
+    }
+    return { success: true, count: input.thresholds.length };
+  })
+});
+
+// server/routers/order.ts
+import { z as z5 } from "zod";
+import { TRPCError as TRPCError4 } from "@trpc/server";
+init_permissions();
+
+// shared/validators.ts
+import { z as z4 } from "zod";
+var DECIMAL_REGEX = /^-?\d{1,10}(\.\d{1,4})?$/;
+var POSITIVE_DECIMAL_REGEX = /^\d{1,10}(\.\d{1,4})?$/;
+var optionalDecimal = () => z4.string().optional().refine(
+  (val) => {
+    if (val === void 0 || val === null || val === "") return true;
+    return DECIMAL_REGEX.test(val);
+  },
+  { message: "\u91D1\u989D\u683C\u5F0F\u4E0D\u6B63\u786E\uFF0C\u8BF7\u8F93\u5165\u5408\u6CD5\u6570\u5B57\uFF08\u6700\u591A4\u4F4D\u5C0F\u6570\uFF09" }
+);
+var requiredPositiveDecimal = () => z4.string().min(1, "\u91D1\u989D\u4E0D\u80FD\u4E3A\u7A7A").refine(
+  (val) => POSITIVE_DECIMAL_REGEX.test(val) && parseFloat(val) > 0,
+  { message: "\u91D1\u989D\u5FC5\u987B\u4E3A\u6B63\u6570" }
+);
+var optionalWeight = () => z4.string().optional().refine(
+  (val) => {
+    if (val === void 0 || val === null || val === "") return true;
+    return /^\d{1,10}(\.\d{1,5})?$/.test(val) && parseFloat(val) > 0;
+  },
+  { message: "\u91CD\u91CF\u5FC5\u987B\u4E3A\u6B63\u6570\uFF08\u4E0D\u5141\u8BB8\u8D1F\u6570\u6216\u96F6\uFF09" }
+);
+
+// server/routers/order.ts
+init_db();
+init_schema();
+init_db();
+import { eq as eq2, and as and2, or, like as like2, desc, asc, sql as sql2, inArray as inArray2, gte, lte, count, ne } from "drizzle-orm";
+
+// server/fieldChangeTracker.ts
+var FIELD_LABELS = {
+  orderNumber: "\u5BA2\u6237\u8BA2\u5355\u53F7",
+  mergedPlanNumber: "\u5408\u5E76\u8BA1\u5212\u53F7",
+  businessType: "\u4E1A\u52A1\u7C7B\u578B",
+  department: "\u90E8\u95E8",
+  isUrgent: "\u52A0\u6025",
+  urgentReason: "\u52A0\u6025\u539F\u56E0",
+  customerId: "\u5BA2\u6237ID",
+  customerName: "\u5BA2\u6237\u540D\u79F0",
+  customerPhone: "\u5BA2\u6237\u7535\u8BDD",
+  cargoName: "\u8D27\u7269\u540D\u79F0",
+  cargoType: "\u8D27\u7269\u7C7B\u578B",
+  weight: "\u91CD\u91CF(\u5428)",
+  volume: "\u4F53\u79EF(\u65B9)",
+  quantity: "\u4EF6\u6570",
+  originProvince: "\u53D1\u8D27\u7701\u4EFD",
+  originCity: "\u53D1\u8D27\u57CE\u5E02",
+  originAddress: "\u53D1\u8D27\u8BE6\u7EC6\u5730\u5740",
+  destinationProvince: "\u76EE\u7684\u7701\u4EFD",
+  destinationCity: "\u76EE\u7684\u57CE\u5E02",
+  destinationAddress: "\u76EE\u7684\u8BE6\u7EC6\u5730\u5740",
+  receiverName: "\u6536\u8D27\u4EBA",
+  receiverPhone: "\u6536\u8D27\u7535\u8BDD",
+  quotedPrice: "\u62A5\u4EF7",
+  customerPrice: "\u5BA2\u6237\u4EF7\u683C",
+  actualFreight: "\u5B9E\u9645\u8FD0\u8D39",
+  dispatchPrice: "\u8C03\u5EA6\u4EF7",
+  plateNumber: "\u8F66\u724C\u53F7",
+  driverName: "\u53F8\u673A\u59D3\u540D",
+  driverPhone: "\u53F8\u673A\u7535\u8BDD",
+  shippingNote: "\u53D1\u8D27\u5907\u6CE8",
+  receivingNote: "\u6536\u8D27\u5907\u6CE8",
+  dispatcherRemark: "\u8C03\u5EA6\u5907\u6CE8",
+  status: "\u8BA2\u5355\u72B6\u6001",
+  depositAmount: "\u62BC\u91D1\u91D1\u989D",
+  depositStatus: "\u62BC\u91D1\u72B6\u6001",
+  podStatus: "\u56DE\u5355\u72B6\u6001",
+  freightStationName: "\u8D27\u7AD9\u540D\u79F0",
+  freightWaybillNumber: "\u8D27\u7AD9\u8FD0\u5355\u53F7",
+  inquiryPhone: "\u67E5\u8D27\u7535\u8BDD",
+  ltlUnitPrice: "\u96F6\u62C5\u5355\u4EF7",
+  ltlDeliveryFee: "\u9001\u8D27\u8D39",
+  ltlOtherFee: "\u5176\u4ED6\u8D39\u7528",
+  orderDate: "\u8BA2\u5355\u65E5\u671F",
+  assignedDispatcherId: "\u8C03\u5EA6\u5458ID"
+};
+var BUSINESS_TYPE_LABELS = {
+  outsource: "\u5916\u8BF7",
+  self: "\u81EA\u8FD0",
+  ltl: "\u96F6\u62C5"
+};
+var STATUS_LABELS = {
+  pending_assign: "\u5F85\u5206\u914D",
+  pending_price: "\u5F85\u5B9A\u4EF7",
+  pending_vehicle: "\u5F85\u627E\u8F66",
+  in_transit: "\u8FD0\u8F93\u4E2D",
+  delivered: "\u5DF2\u9001\u8FBE",
+  signed: "\u5DF2\u7B7E\u6536",
+  settled: "\u5DF2\u7ED3\u7B97",
+  cancelled: "\u5DF2\u53D6\u6D88",
+  on_hold: "\u6682\u6263",
+  pending_inquiry: "\u5F85\u8BE2\u4EF7",
+  inquiry_replied: "\u5DF2\u8BE2\u4EF7",
+  ltl_in_transit: "\u96F6\u62C5\u8FD0\u8F93\u4E2D",
+  ltl_arrived: "\u96F6\u62C5\u5DF2\u5230\u8FBE"
+};
+var DEPOSIT_STATUS_LABELS = {
+  none: "\u65E0\u62BC\u91D1",
+  paid: "\u5DF2\u6536\u53D6",
+  refunded: "\u5DF2\u9000\u8FD8",
+  not_returned: "\u4E0D\u9000\u8FD8"
+};
+var POD_STATUS_LABELS = {
+  pending: "\u5F85\u6536",
+  original_sent: "\u5DF2\u5BC4\u51FA",
+  received: "\u5DF2\u6536\u5230"
+};
+function formatValue(field, value) {
+  if (value === null || value === void 0 || value === "") return null;
+  if (field === "businessType") return BUSINESS_TYPE_LABELS[String(value)] || String(value);
+  if (field === "status") return STATUS_LABELS[String(value)] || String(value);
+  if (field === "depositStatus") return DEPOSIT_STATUS_LABELS[String(value)] || String(value);
+  if (field === "podStatus") return POD_STATUS_LABELS[String(value)] || String(value);
+  if (field === "isUrgent") return value ? "\u662F" : "\u5426";
+  if (value instanceof Date) return value.toLocaleString("zh-CN");
+  return String(value);
+}
+function trackFieldChanges(oldRecord, newData) {
+  const changes = [];
+  for (const [field, newValue] of Object.entries(newData)) {
+    if (["id", "createdAt", "updatedAt", "createdBy"].includes(field)) continue;
+    if (newValue === void 0) continue;
+    const oldValue = oldRecord[field];
+    const oldStr = formatValue(field, oldValue);
+    const newStr = formatValue(field, newValue);
+    if (oldStr === newStr) continue;
+    if (!oldStr && !newStr) continue;
+    changes.push({
+      field,
+      label: FIELD_LABELS[field] || field,
+      oldValue: oldStr,
+      newValue: newStr
+    });
+  }
+  return changes;
+}
+function extractStatusTransition(changes) {
+  if (!changes || typeof changes !== "object") {
+    return { fromStatus: null, toStatus: null, reason: null };
+  }
+  const payload = changes;
+  const rawUpdate = payload.rawUpdate && typeof payload.rawUpdate === "object" ? payload.rawUpdate : null;
+  const fromStatus = typeof payload.fromStatus === "string" ? payload.fromStatus : null;
+  const toStatus = typeof payload.toStatus === "string" ? payload.toStatus : typeof rawUpdate?.status === "string" ? rawUpdate.status : typeof payload.status === "string" ? payload.status : null;
+  const reason = typeof payload.reason === "string" ? payload.reason : typeof rawUpdate?.reason === "string" ? rawUpdate.reason : null;
+  return { fromStatus, toStatus, reason };
+}
+function classifyEntryQueuePendingAssignEvent(log, statusLabels) {
+  const { fromStatus, toStatus, reason } = extractStatusTransition(log.changes);
+  if (toStatus !== "pending_assign") {
+    return null;
+  }
+  const isReturned = log.action === "rollback" || log.action === "revert";
+  return {
+    enteredAt: log.createdAt,
+    eventType: isReturned ? "returned" : "rerouted",
+    returnedBy: isReturned ? log.userName ?? null : null,
+    reason: isReturned ? reason : null,
+    fromStatus: isReturned ? fromStatus : null,
+    fromLabel: isReturned && fromStatus ? statusLabels[fromStatus] || fromStatus : null,
+    description: log.description ?? null,
+    action: log.action ?? null
+  };
+}
+
+// server/routers/order.ts
+init_notification();
+
+// shared/safeParseFloat.ts
+function safeParseFloat(value) {
+  if (value === null || value === void 0 || value === "") return 0;
+  const n = parseFloat(String(value));
+  return isNaN(n) || !isFinite(n) ? 0 : n;
+}
+
+// shared/ltlWeight.ts
+var KG_TO_TON = 1e3;
+var LTL_KG_AUTO_CONVERT_THRESHOLD = 100;
+var TON_WEIGHT_PRECISION = 1e5;
+function toPositiveNumber(value) {
+  if (value === void 0 || value === null || value === "") return null;
+  const numeric = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return numeric;
+}
+function formatTonWeight(value) {
+  const rounded = Math.round(value * TON_WEIGHT_PRECISION) / TON_WEIGHT_PRECISION;
+  return rounded.toString();
+}
+function shouldAutoConvertLtlWeightFromKg(weight) {
+  const numeric = toPositiveNumber(weight);
+  if (numeric === null) return false;
+  return numeric > LTL_KG_AUTO_CONVERT_THRESHOLD;
+}
+function normalizeLtlWeightField(weight) {
+  if (weight === void 0) return void 0;
+  if (weight === null || weight === "") return weight;
+  const numeric = toPositiveNumber(weight);
+  if (numeric === null) return typeof weight === "number" ? String(weight) : String(weight).trim();
+  if (!shouldAutoConvertLtlWeightFromKg(numeric)) {
+    return typeof weight === "number" ? String(weight) : String(weight).trim();
+  }
+  return formatTonWeight(numeric / KG_TO_TON);
+}
+function resolveWeightInTons(businessType, weight) {
+  const numeric = toPositiveNumber(weight);
+  if (numeric === null) return 0;
+  if (businessType === "ltl" && shouldAutoConvertLtlWeightFromKg(numeric)) {
+    return Math.round(numeric / KG_TO_TON * TON_WEIGHT_PRECISION) / TON_WEIGHT_PRECISION;
+  }
+  return numeric;
+}
+
+// server/assignmentScope.ts
+var SUBCHAIN_PARENT_IDS_MARKER = "\u3010\u5173\u8054\u4E3B\u5355IDs\u3011";
+var LTL_SUBCHAIN_RELEASED_STATUSES = /* @__PURE__ */ new Set(["pending_assign", "cancelled"]);
+var LTL_SUBCHAIN_TAGS = ["\u3010\u96F6\u62C5\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE\u3011", "\u3010\u96F6\u62C5\u540E\u6BB5\u5916\u8BF7\u5B50\u94FE\u3011"];
+function isLtlSubchainCandidate(remarks) {
+  const text2 = String(remarks || "");
+  return text2.includes(SUBCHAIN_PARENT_IDS_MARKER) || LTL_SUBCHAIN_TAGS.some((tag) => text2.includes(tag));
+}
+function uniquePositiveIds(values) {
+  return Array.from(
+    new Set(
+      values.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+function parseRelatedParentIdsFromRemarks(remarks) {
+  const text2 = String(remarks || "");
+  const match = text2.match(/【关联主单IDs】,?([\d,]+),?/);
+  if (!match?.[1]) return [];
+  return uniquePositiveIds(
+    match[1].split(",").map((item) => Number(item.trim()))
+  );
+}
+function isActiveLtlSubchainStatus(status) {
+  return Boolean(status) && !LTL_SUBCHAIN_RELEASED_STATUSES.has(String(status));
+}
+function expandDispatcherAssignmentOrderIds(baseOrderIds, candidates) {
+  const normalizedBaseOrderIds = uniquePositiveIds(baseOrderIds);
+  if (normalizedBaseOrderIds.length === 0) {
+    return {
+      orderIds: [],
+      autoFollowOrderIds: []
+    };
+  }
+  const baseIdSet = new Set(normalizedBaseOrderIds);
+  const autoFollowOrderIds = uniquePositiveIds(
+    candidates.filter((item) => item?.businessType === "outsource").filter((item) => !baseIdSet.has(Number(item.id))).filter((item) => isLtlSubchainCandidate(item.remarks)).filter((item) => isActiveLtlSubchainStatus(item.status)).filter((item) => {
+      const relatedParentIds = uniquePositiveIds([
+        item.parentId,
+        ...parseRelatedParentIdsFromRemarks(item.remarks)
+      ]);
+      return relatedParentIds.some((parentId) => baseIdSet.has(parentId));
+    }).map((item) => Number(item.id))
+  );
+  return {
+    orderIds: uniquePositiveIds([...normalizedBaseOrderIds, ...autoFollowOrderIds]),
+    autoFollowOrderIds
+  };
+}
+
+// server/routers/order.ts
+var dbHelpers = { findFreightStationByName, createFreightStation };
+var SYSTEM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function randomSuffix(len) {
+  let s = "";
+  for (let i = 0; i < len; i++) {
+    s += SYSTEM_CODE_CHARS[Math.floor(Math.random() * SYSTEM_CODE_CHARS.length)];
+  }
+  return s;
+}
+async function generateSystemCode(maxRetries = 5) {
+  const db = await getDb();
+  if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+  const today = /* @__PURE__ */ new Date();
+  const dateStr = today.toISOString().slice(0, 10).replace(/-/g, "");
+  const prefix = `YA${dateStr}`;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const code = `${prefix}${randomSuffix(6)}`;
+    const existing = await db.select({ id: orders.id }).from(orders).where(eq2(orders.systemCode, code)).limit(1);
+    if (existing.length === 0) return code;
+  }
+  const fallback = `${prefix}${Date.now().toString(36).toUpperCase().slice(-6)}`;
+  return fallback;
+}
+var CITY_TO_PROVINCE = {
+  // 北京市
+  "\u5317\u4EAC": "\u5317\u4EAC\u5E02",
+  // 天津市
+  "\u5929\u6D25": "\u5929\u6D25\u5E02",
+  // 上海市
+  "\u4E0A\u6D77": "\u4E0A\u6D77\u5E02",
+  // 重庆市
+  "\u91CD\u5E86": "\u91CD\u5E86\u5E02",
+  // 

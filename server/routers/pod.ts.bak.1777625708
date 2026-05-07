@@ -1,0 +1,1194 @@
+import { z } from "zod";
+import { TRPCError } from "@trpc/server";
+import { protectedProcedure, permissionProcedure } from "../_core/trpc";
+import { PERMISSIONS } from "@shared/permissions";
+import { optionalDecimal } from "@shared/validators";
+import { router } from "../_core/trpc";
+import { getDb, createOperationLog, getUserPermissions } from "../db";
+import { podRecords, orders, ltlInquiries, overdueNotifications } from "../../drizzle/schema";
+import { eq, and, desc, count, like, or, inArray, sql, ne, gte } from "drizzle-orm";
+import {
+  checkOverduePods,
+  getBusinessOverdueLevel,
+  getOverdueBaseAt,
+  getOverdueDaysFromBase,
+  getOverdueList,
+} from "../podOverdueChecker";
+
+type PodRelatedOrderSnapshot = {
+  id?: number;
+  status: string | null;
+  mergedPlanNumber: string | null;
+  plateNumber: string | null;
+  dispatchDate: Date | null;
+  depositStatus: string | null;
+  businessType?: string | null;
+  podOwnership?: string | null;
+};
+
+function isResponsiblePodOwnership(podOwnership?: string | null) {
+  return podOwnership === "current_order";
+}
+
+async function resolveGroupOrderIds(db: any, relatedOrderId: number, relatedOrder: PodRelatedOrderSnapshot) {
+  let groupOrderIds: number[] = [relatedOrderId];
+  if (relatedOrder.mergedPlanNumber) {
+    const groupRows = await db.select({ id: orders.id }).from(orders)
+      .where(and(
+        eq(orders.mergedPlanNumber, relatedOrder.mergedPlanNumber),
+        eq(orders.podOwnership, "current_order" as any),
+      ));
+    if (groupRows.length > 0) groupOrderIds = groupRows.map((row: { id: number }) => row.id);
+  } else if (relatedOrder.plateNumber && relatedOrder.dispatchDate) {
+    const groupRows = await db.select({ id: orders.id }).from(orders)
+      .where(and(
+        eq(orders.plateNumber, relatedOrder.plateNumber),
+        eq(orders.dispatchDate, relatedOrder.dispatchDate),
+        eq(orders.podOwnership, "current_order" as any),
+      ));
+    if (groupRows.length > 0) groupOrderIds = groupRows.map((row: { id: number }) => row.id);
+  }
+  return groupOrderIds;
+}
+
+function resolvePendingDepositStatus(depositAmount: string | number | null | undefined, depositRefundable: boolean | null | undefined) {
+  const numericDepositAmount = Number(depositAmount ?? 0);
+  if (!Number.isFinite(numericDepositAmount) || numericDepositAmount <= 0) {
+    return "none" as const;
+  }
+  return depositRefundable === false ? ("not_refundable" as const) : ("paid" as const);
+}
+
+type PodOriginalStatus = "pending" | "sent" | "received" | "lost";
+type PodOperationType = "mark_sent" | "confirm_received" | "ocr_verify" | "deposit_update" | "attachment_update" | "generic";
+
+const POD_OPERATION_LABELS: Record<PodOperationType, string> = {
+  mark_sent: "回单寄出",
+  confirm_received: "回单收回确认",
+  ocr_verify: "OCR核验回写",
+  deposit_update: "押金更新",
+  attachment_update: "附件更新",
+  generic: "回单更新",
+};
+
+const POD_STATUS_LABELS: Record<PodOriginalStatus, string> = {
+  pending: "待寄",
+  sent: "已寄出",
+  received: "已收到",
+  lost: "已遗失",
+};
+
+const POD_ALLOWED_TRANSITIONS: Record<PodOriginalStatus, PodOriginalStatus[]> = {
+  pending: ["sent", "lost"],
+  sent: ["pending", "received", "lost"],
+  received: [],
+  lost: ["pending"],
+};
+
+function requirePodPermission(userPermissions: string[], permission: string, actionLabel: string) {
+  if (!userPermissions.includes(permission)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: `无权${actionLabel}` });
+  }
+}
+
+function assertPodUpdateFieldPermissions(userPermissions: string[], data: {
+  originalStatus?: PodOriginalStatus;
+  ocrVerified?: boolean;
+  depositLinked?: boolean;
+  depositAmount?: string | number | null;
+  depositRefunded?: boolean;
+}) {
+  if (data.originalStatus !== undefined) {
+    if (data.originalStatus === "received") {
+      requirePodPermission(userPermissions, PERMISSIONS.POD_CONFIRM_RECEIVED, "确认回单收到");
+    } else {
+      requirePodPermission(userPermissions, PERMISSIONS.POD_MARK_SENT, "标记回单寄出或撤销寄出");
+    }
+  }
+
+  if (data.ocrVerified !== undefined) {
+    requirePodPermission(userPermissions, PERMISSIONS.POD_CONFIRM_RECEIVED, "更新回单核验状态");
+  }
+
+  if (data.depositLinked !== undefined || data.depositAmount !== undefined || data.depositRefunded !== undefined) {
+    requirePodPermission(userPermissions, PERMISSIONS.POD_REFUND_DEPOSIT, "处理押金信息");
+  }
+}
+
+function isSelfBusinessType(businessType?: string | null) {
+  return businessType === "self";
+}
+
+function assertPodStatusTransition(currentStatus: PodOriginalStatus, nextStatus: PodOriginalStatus, businessType?: string | null) {
+  if (currentStatus === nextStatus) return;
+
+  if (isSelfBusinessType(businessType) && currentStatus === "pending" && nextStatus === "received") {
+    return;
+  }
+
+  const allowedNextStatuses = POD_ALLOWED_TRANSITIONS[currentStatus] ?? [];
+  if (!allowedNextStatuses.includes(nextStatus)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `回单状态不允许从“${POD_STATUS_LABELS[currentStatus]}”直接变更为“${POD_STATUS_LABELS[nextStatus]}”`,
+    });
+  }
+}
+
+async function syncOrderByPodStatus(db: any, orderId: number, originalStatus: "pending" | "sent" | "received" | "lost", now: Date) {
+  const orderRow = await db.select({
+    status: orders.status,
+    podStatus: orders.podStatus,
+    depositStatus: orders.depositStatus,
+    depositAmount: orders.depositAmount,
+    depositRefundable: orders.depositRefundable,
+  }).from(orders).where(eq(orders.id, orderId)).limit(1);
+  if (!orderRow[0]) return;
+
+  const orderUpdateData: Record<string, any> = {};
+
+  if (originalStatus === "received") {
+    orderUpdateData.podStatus = "original_received";
+    orderUpdateData.podDate = now;
+    if (orderRow[0].status === "delivered") {
+      orderUpdateData.status = "signed" as any;
+      orderUpdateData.signedDate = now;
+    }
+  } else if (originalStatus === "sent") {
+    orderUpdateData.podStatus = "original_sent";
+    orderUpdateData.podSentDate = now;
+    orderUpdateData.podDate = null;
+    if (orderRow[0].status === "signed" && orderRow[0].podStatus === "original_received") {
+      orderUpdateData.status = "delivered" as any;
+      orderUpdateData.signedDate = null;
+    }
+  } else {
+    orderUpdateData.podStatus = "none";
+    orderUpdateData.podSentDate = null;
+    orderUpdateData.podDate = null;
+    if (orderRow[0].status === "signed" && orderRow[0].podStatus === "original_received") {
+      orderUpdateData.status = "delivered" as any;
+      orderUpdateData.signedDate = null;
+    }
+  }
+
+  if (originalStatus !== "received" && orderRow[0].depositStatus === "refunded") {
+    orderUpdateData.depositStatus = resolvePendingDepositStatus(orderRow[0].depositAmount, orderRow[0].depositRefundable);
+    orderUpdateData.depositRefundDate = null;
+  }
+
+  await db.update(orders).set(orderUpdateData).where(eq(orders.id, orderId));
+}
+
+type SelfMonthlySummary = {
+  month: string;
+  signedTotalCount: number;
+  receivedCount: number;
+  unreceivedCount: number;
+  pendingCount: number;
+  sentCount: number;
+  lostCount: number;
+  overdueCount: number;
+  yellowCount: number;
+  orangeCount: number;
+  redCount: number;
+  vehicleCount: number;
+  customerCount: number;
+  oldestSignedDate: Date | null;
+};
+
+function formatMonthKey(value: Date | string | null | undefined) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function createEmptySelfMonthlySummary(month: string): SelfMonthlySummary {
+  return {
+    month,
+    signedTotalCount: 0,
+    receivedCount: 0,
+    unreceivedCount: 0,
+    pendingCount: 0,
+    sentCount: 0,
+    lostCount: 0,
+    overdueCount: 0,
+    yellowCount: 0,
+    orangeCount: 0,
+    redCount: 0,
+    vehicleCount: 0,
+    customerCount: 0,
+    oldestSignedDate: null,
+  };
+}
+
+export const podRouter = router({
+  // 创建回单记录
+  create: protectedProcedure.input(
+    z.object({
+      orderId: z.number(),
+      deliveryNoteUrl: z.string().optional(),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+
+    const orderRow = await db.select({
+      id: orders.id,
+      podOwnership: orders.podOwnership,
+    }).from(orders).where(eq(orders.id, input.orderId)).limit(1);
+    if (!orderRow[0]) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "订单不存在" });
+    }
+    if (!isResponsiblePodOwnership(orderRow[0].podOwnership)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "当前订单不负责回单流转，无法创建回单记录。" });
+    }
+
+    // 检查是否已存在该订单的回单记录，防止重复创建
+    const existing = await db.select({ id: podRecords.id, podOwnership: podRecords.podOwnership }).from(podRecords)
+      .where(eq(podRecords.orderId, input.orderId)).limit(1);
+    if (existing.length > 0) {
+      if (!isResponsiblePodOwnership(existing[0].podOwnership)) {
+        await db.update(podRecords).set({ podOwnership: "current_order" }).where(eq(podRecords.id, existing[0].id));
+      }
+      return { id: existing[0].id };
+    }
+
+    const result = await db.insert(podRecords).values({
+      orderId: input.orderId,
+      podOwnership: "current_order",
+      deliveryNoteUrl: input.deliveryNoteUrl || null,
+    });
+
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "create",
+      targetType: "pod",
+      targetId: String(result[0].insertId),
+      description: `创建回单记录，订单#${input.orderId}`,
+    });
+
+    return { id: result[0].insertId };
+  }),
+
+  // 回单列表（支持关键字搜索关联订单的客户名/订单号/车牌号）
+  list: protectedProcedure.input(
+    z.object({
+      page: z.number().default(1),
+      pageSize: z.number().default(50),
+      originalStatus: z.string().optional(),
+      keyword: z.string().optional(),
+      businessType: z.enum(["outsource", "self", "ltl"]).optional(),
+    }),
+  ).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return { items: [], total: 0 };
+
+    // 如果有搜索关键字，先从orders表中查出匹配的orderId列表
+    let matchedOrderIds: number[] | null = null;
+    const orderFilterConditions: any[] = [
+      eq(orders.podOwnership, "current_order" as any),
+    ];
+    if (input.businessType) {
+      orderFilterConditions.push(eq(orders.businessType, input.businessType));
+    }
+    if (input.keyword && input.keyword.trim()) {
+      const kw = `%${input.keyword.trim()}%`;
+      orderFilterConditions.push(
+        or(
+          like(orders.systemCode, kw),
+          like(orders.orderNumber, kw),
+          like(orders.customerName, kw),
+          like(orders.plateNumber, kw),
+          like(orders.driverName, kw),
+        ),
+      );
+      const matchedOrders = await db.select({ id: orders.id }).from(orders).where(
+        and(...orderFilterConditions)
+      );
+      matchedOrderIds = matchedOrders.map(o => o.id);
+      if (matchedOrderIds.length === 0) return { items: [], total: 0 };
+    } else if (input.businessType) {
+      // 没有关键字但有businessType过滤，需要先查出对应的orderId
+      const btOrders = await db.select({ id: orders.id }).from(orders).where(
+        and(...orderFilterConditions)
+      );
+      matchedOrderIds = btOrders.map(o => o.id);
+      if (matchedOrderIds.length === 0) return { items: [], total: 0 };
+    }
+
+    const conditions: any[] = [eq(podRecords.podOwnership, "current_order" as any)];
+    if (input.originalStatus) conditions.push(eq(podRecords.originalStatus, input.originalStatus as any));
+    if (matchedOrderIds) conditions.push(inArray(podRecords.orderId, matchedOrderIds));
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [rawItems, totalResult] = await Promise.all([
+      db.select().from(podRecords).where(whereClause)
+        .orderBy(desc(podRecords.createdAt))
+        .limit(input.pageSize)
+        .offset((input.page - 1) * input.pageSize),
+      db.select({ cnt: count() }).from(podRecords).where(whereClause),
+    ]);
+
+    // 关联订单数据（押金、货站开单等）
+    const items = await Promise.all(
+      rawItems.map(async (pod) => {
+        const orderRow = await db.select({
+          orderNumber: orders.orderNumber,
+          systemCode: orders.systemCode,
+          customerName: orders.customerName,
+          originCity: orders.originCity,
+          destinationCity: orders.destinationCity,
+          plateNumber: orders.plateNumber,
+          driverName: orders.driverName,
+          driverPhone: orders.driverPhone,
+          depositAmount: orders.depositAmount,
+          depositStatus: orders.depositStatus,
+          depositRefundable: orders.depositRefundable,
+          stationReceiptUrl: orders.stationReceiptUrl,
+          mergedPlanNumber: orders.mergedPlanNumber,
+          dispatchDate: orders.dispatchDate,
+          businessType: orders.businessType,
+          signedDate: orders.signedDate,
+          weight: orders.weight,
+          actualFreight: orders.actualFreight,
+          podOwnership: orders.podOwnership,
+        }).from(orders).where(eq(orders.id, pod.orderId)).limit(1);
+        return { ...pod, order: orderRow[0] || null };
+      })
+    );
+
+    // 计算每个回单记录的 allPodsReceived 字段
+    // 按 mergedPlanNumber 或 plateNumber+dispatchDate 分组，检查同组所有订单的回单是否都已收到
+    const enrichedItems = await Promise.all(
+      items.map(async (item) => {
+        if (!item.order) return { ...item, allPodsReceived: false };
+        
+        const mpn = item.order.mergedPlanNumber;
+        const plateNumber = item.order.plateNumber;
+        const dispatchDate = item.order.dispatchDate;
+        
+        // 查找同组订单
+        let groupOrderIds: number[] = [item.orderId];
+        if (mpn) {
+          const groupRows = await db.select({ id: orders.id }).from(orders)
+            .where(and(
+              eq(orders.mergedPlanNumber, mpn),
+              eq(orders.podOwnership, "current_order" as any),
+            ));
+          if (groupRows.length > 1) {
+            groupOrderIds = groupRows.map(r => r.id);
+          }
+        } else if (plateNumber && dispatchDate) {
+          // 无合并计划号时，按车牌+派车日期分组
+          const groupRows = await db.select({ id: orders.id }).from(orders)
+            .where(and(
+              eq(orders.plateNumber, plateNumber),
+              eq(orders.dispatchDate, dispatchDate),
+              eq(orders.podOwnership, "current_order" as any),
+            ));
+          if (groupRows.length > 1) {
+            groupOrderIds = groupRows.map(r => r.id);
+          }
+        }
+        
+        // 检查同组所有订单的回单状态
+        let allPodsReceived = true;
+        if (groupOrderIds.length > 0) {
+          const groupPods = await db.select({
+            orderId: podRecords.orderId,
+            originalStatus: podRecords.originalStatus,
+          }).from(podRecords)
+            .where(and(
+              inArray(podRecords.orderId, groupOrderIds),
+              eq(podRecords.podOwnership, "current_order" as any),
+            ));
+          
+          // 每个订单都必须有回单记录且状态为 received，已寄出不应视为已全部收到
+          for (const oid of groupOrderIds) {
+            const pod = groupPods.find(p => p.orderId === oid);
+            if (!pod || pod.originalStatus !== "received") {
+              allPodsReceived = false;
+              break;
+            }
+          }
+        }
+        
+        return { ...item, allPodsReceived, groupOrderIds };
+      })
+    );
+
+    return { items: enrichedItems, total: totalResult[0]?.cnt ?? 0 };
+  }),
+
+  // 押金金额汇总统计（合并3次查询为1次 SUM(CASE WHEN)，减少数据库往返）
+  depositStats: protectedProcedure.input(
+    z.object({
+      businessType: z.enum(["outsource", "self", "ltl"]).optional(),
+    }).optional(),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { pendingTotal: "0", refundedTotal: "0", nonRefundableTotal: "0", pendingCount: 0, refundedCount: 0, nonRefundableCount: 0 };
+
+    const depositConditions: any[] = [];
+    if (input?.businessType) {
+      depositConditions.push(eq(orders.businessType, input.businessType));
+    }
+    const depositWhere = depositConditions.length > 0 ? and(...depositConditions) : undefined;
+
+    const result = await db.select({
+      pendingTotal: sql<string>`COALESCE(SUM(CASE WHEN ${orders.depositStatus} = 'paid' AND ${orders.depositAmount} > 0 THEN ${orders.depositAmount} ELSE 0 END), 0)`,
+      pendingCount: sql<number>`SUM(CASE WHEN ${orders.depositStatus} = 'paid' AND ${orders.depositAmount} > 0 THEN 1 ELSE 0 END)`,
+      refundedTotal: sql<string>`COALESCE(SUM(CASE WHEN ${orders.depositStatus} = 'refunded' AND ${orders.depositAmount} > 0 THEN ${orders.depositAmount} ELSE 0 END), 0)`,
+      refundedCount: sql<number>`SUM(CASE WHEN ${orders.depositStatus} = 'refunded' AND ${orders.depositAmount} > 0 THEN 1 ELSE 0 END)`,
+      nonRefundableTotal: sql<string>`COALESCE(SUM(CASE WHEN ${orders.depositStatus} = 'not_refundable' AND ${orders.depositAmount} > 0 THEN ${orders.depositAmount} ELSE 0 END), 0)`,
+      nonRefundableCount: sql<number>`SUM(CASE WHEN ${orders.depositStatus} = 'not_refundable' AND ${orders.depositAmount} > 0 THEN 1 ELSE 0 END)`,
+    }).from(orders).where(depositWhere);
+
+    return {
+      pendingTotal: String(result[0]?.pendingTotal ?? "0"),
+      refundedTotal: String(result[0]?.refundedTotal ?? "0"),
+      nonRefundableTotal: String(result[0]?.nonRefundableTotal ?? "0"),
+      pendingCount: Number(result[0]?.pendingCount ?? 0),
+      refundedCount: Number(result[0]?.refundedCount ?? 0),
+      nonRefundableCount: Number(result[0]?.nonRefundableCount ?? 0),
+    };
+  }),
+
+  // 获取超期未回收回单列表（带分级信息：黄色≤5天/橙色5-15天/红色≥15天）
+  overdueList: protectedProcedure.input(
+    z.object({
+      overdueDays: z.number().default(0),
+      businessType: z.enum(["outsource", "self", "ltl"]).optional(),
+    })
+  ).query(async ({ input }) => {
+    const items = await getOverdueList(input.overdueDays, input.businessType);
+    return items;
+  }),
+
+  // 获取超期通知历史记录
+  overdueNotificationHistory: protectedProcedure.input(
+    z.object({ limit: z.number().default(50) })
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const records = await db.select().from(overdueNotifications)
+      .orderBy(desc(overdueNotifications.sentAt))
+      .limit(input.limit);
+    return records;
+  }),
+
+  // 获取超期统计摘要（按级别分组）
+  overdueStats: protectedProcedure.input(
+    z.object({
+      businessType: z.enum(["outsource", "self", "ltl"]).optional(),
+    }).optional(),
+  ).query(async ({ input }) => {
+    const items = await getOverdueList(0, input?.businessType);
+    const yellow = items.filter(i => i.level === "yellow");
+    const orange = items.filter(i => i.level === "orange");
+    const red = items.filter(i => i.level === "red");
+    return {
+      total: items.length,
+      yellow: yellow.length,
+      orange: orange.length,
+      red: red.length,
+      items,
+    };
+  }),
+
+  // 外请超期回单统计（仅限outsource业务类型）
+  outsourceOverdueStats: protectedProcedure.query(async () => {
+    const items = await getOverdueList(0, "outsource");
+    const yellow = items.filter(i => i.level === "yellow");
+    const orange = items.filter(i => i.level === "orange");
+    const red = items.filter(i => i.level === "red");
+    return {
+      total: items.length,
+      yellow: yellow.length,
+      orange: orange.length,
+      red: red.length,
+      items,
+    };
+  }),
+
+  // 自运月度回单未收统计（按签收月份聚合，展示未收与超时预警）
+  selfMonthlyUnreceivedStats: protectedProcedure.input(
+    z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional() }).optional(),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    const currentMonth = formatMonthKey(new Date()) || new Date().toISOString().slice(0, 7);
+
+    if (!db) {
+      const selectedMonth = input?.month || currentMonth;
+      return {
+        currentMonth,
+        selectedMonth,
+        months: [],
+        summary: createEmptySelfMonthlySummary(selectedMonth),
+        items: [],
+      };
+    }
+
+    const podRows = await db.select({
+      id: podRecords.id,
+      orderId: podRecords.orderId,
+      originalStatus: podRecords.originalStatus,
+      originalSentAt: podRecords.originalSentAt,
+      originalReceivedAt: podRecords.originalReceivedAt,
+      createdAt: podRecords.createdAt,
+    }).from(podRecords).where(and(
+      eq(podRecords.podOwnership, "current_order" as any),
+      or(
+        eq(podRecords.originalStatus, "pending"),
+        eq(podRecords.originalStatus, "sent"),
+        eq(podRecords.originalStatus, "received"),
+        eq(podRecords.originalStatus, "lost"),
+      ),
+    ));
+
+    const orderIds = Array.from(new Set(podRows.map((row) => row.orderId)));
+    if (orderIds.length === 0) {
+      const selectedMonth = input?.month || currentMonth;
+      return {
+        currentMonth,
+        selectedMonth,
+        months: [],
+        summary: createEmptySelfMonthlySummary(selectedMonth),
+        items: [],
+      };
+    }
+
+    const orderRows = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      systemCode: orders.systemCode,
+      customerName: orders.customerName,
+      originCity: orders.originCity,
+      destinationCity: orders.destinationCity,
+      plateNumber: orders.plateNumber,
+      driverName: orders.driverName,
+      mergedPlanNumber: orders.mergedPlanNumber,
+      dispatchDate: orders.dispatchDate,
+      businessType: orders.businessType,
+      signedDate: orders.signedDate,
+      actualFreight: orders.actualFreight,
+      depositAmount: orders.depositAmount,
+    }).from(orders).where(and(
+      inArray(orders.id, orderIds),
+      eq(orders.businessType, "self" as any),
+    ));
+
+    const orderMap = new Map(orderRows.map((row) => [row.id, row]));
+    const monthVehicleSets = new Map<string, Set<string>>();
+    const monthCustomerSets = new Map<string, Set<string>>();
+    const monthMap = new Map<string, SelfMonthlySummary>();
+    const detailItems: Array<Record<string, any>> = [];
+    const now = Date.now();
+
+    for (const pod of podRows) {
+      const order = orderMap.get(pod.orderId);
+      if (!order) continue;
+      const month = formatMonthKey(order.signedDate);
+      if (!month) continue;
+
+      const summary = monthMap.get(month) || createEmptySelfMonthlySummary(month);
+      summary.signedTotalCount += 1;
+
+      if (pod.originalStatus === "received") {
+        summary.receivedCount += 1;
+      } else {
+        summary.unreceivedCount += 1;
+        if (pod.originalStatus === "pending") summary.pendingCount += 1;
+        if (pod.originalStatus === "sent") summary.sentCount += 1;
+        if (pod.originalStatus === "lost") summary.lostCount += 1;
+
+        const overdueBaseAt = getOverdueBaseAt({ createdAt: pod.createdAt }, {
+          businessType: order.businessType,
+          signedDate: order.signedDate,
+        });
+        const overdueDays = getOverdueDaysFromBase(overdueBaseAt, now);
+        const level = overdueDays === null ? null : getBusinessOverdueLevel(overdueDays, order.businessType || null);
+        if (level) {
+          summary.overdueCount += 1;
+          if (level === "yellow") summary.yellowCount += 1;
+          if (level === "orange") summary.orangeCount += 1;
+          if (level === "red") summary.redCount += 1;
+        }
+        if (order.signedDate) {
+          const signedDate = order.signedDate instanceof Date ? order.signedDate : new Date(order.signedDate);
+          if (!summary.oldestSignedDate || signedDate < summary.oldestSignedDate) {
+            summary.oldestSignedDate = signedDate;
+          }
+        }
+
+        detailItems.push({
+          month,
+          podId: pod.id,
+          orderId: pod.orderId,
+          originalStatus: pod.originalStatus,
+          originalSentAt: pod.originalSentAt,
+          originalReceivedAt: pod.originalReceivedAt,
+          createdAt: pod.createdAt,
+          overdueDays: overdueDays ?? 0,
+          level,
+          overdueBaseAt,
+          orderNumber: order.orderNumber,
+          systemCode: order.systemCode,
+          customerName: order.customerName,
+          originCity: order.originCity,
+          destinationCity: order.destinationCity,
+          plateNumber: order.plateNumber,
+          driverName: order.driverName,
+          mergedPlanNumber: order.mergedPlanNumber,
+          dispatchDate: order.dispatchDate,
+          signedDate: order.signedDate,
+          actualFreight: order.actualFreight,
+          depositAmount: order.depositAmount,
+        });
+      }
+
+      if (!monthVehicleSets.has(month)) monthVehicleSets.set(month, new Set());
+      if (order.plateNumber) monthVehicleSets.get(month)!.add(order.plateNumber);
+      if (!monthCustomerSets.has(month)) monthCustomerSets.set(month, new Set());
+      if (order.customerName) monthCustomerSets.get(month)!.add(order.customerName);
+      monthMap.set(month, summary);
+    }
+
+    const months = Array.from(monthMap.values())
+      .map((summary) => ({
+        ...summary,
+        vehicleCount: monthVehicleSets.get(summary.month)?.size ?? 0,
+        customerCount: monthCustomerSets.get(summary.month)?.size ?? 0,
+      }))
+      .sort((a, b) => b.month.localeCompare(a.month));
+
+    const selectedMonth = input?.month || months[0]?.month || currentMonth;
+    const summary = months.find((item) => item.month === selectedMonth) || createEmptySelfMonthlySummary(selectedMonth);
+    const items = detailItems
+      .filter((item) => item.month === selectedMonth)
+      .sort((a, b) => {
+        if (b.overdueDays !== a.overdueDays) return b.overdueDays - a.overdueDays;
+        return new Date(a.signedDate || a.createdAt || 0).getTime() - new Date(b.signedDate || b.createdAt || 0).getTime();
+      });
+
+    return {
+      currentMonth,
+      selectedMonth,
+      months,
+      summary,
+      items,
+    };
+  }),
+
+  // 更新回单状态（权限细化：需要 POD_CONFIRM_RECEIVED 权限）
+  updateStatus: permissionProcedure([PERMISSIONS.POD_CONFIRM_RECEIVED, PERMISSIONS.POD_REFUND_DEPOSIT, PERMISSIONS.POD_MARK_SENT]).input(
+    z.object({
+      id: z.number(),
+      operationType: z.enum(["mark_sent", "confirm_received", "ocr_verify", "deposit_update", "attachment_update", "generic"]).optional(),
+      originalStatus: z.enum(["pending", "sent", "received", "lost"]).optional(),
+      ocrVerified: z.boolean().optional(),
+      ocrResult: z.any().optional(),
+      depositLinked: z.boolean().optional(),
+      depositAmount: optionalDecimal(),
+      depositRefunded: z.boolean().optional(),
+      deliveryNoteUrl: z.string().optional(),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+    const { id, ...data } = input;
+
+    const podRow = await db.select({
+      orderId: podRecords.orderId,
+      podOwnership: podRecords.podOwnership,
+      originalStatus: podRecords.originalStatus,
+      businessType: orders.businessType,
+    }).from(podRecords)
+      .leftJoin(orders, eq(orders.id, podRecords.orderId))
+      .where(eq(podRecords.id, id)).limit(1);
+
+    if (!podRow[0]) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "回单记录不存在" });
+    }
+    if (!isResponsiblePodOwnership(podRow[0].podOwnership)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "当前回单不属于可操作的责任单记录。" });
+    }
+
+    if (ctx.user!.role !== "admin") {
+      const userPermissions = await getUserPermissions(ctx.user!.role);
+      assertPodUpdateFieldPermissions(userPermissions, data);
+    }
+
+    const updateData: Record<string, any> = {};
+    const currentOriginalStatus = (podRow[0].originalStatus ?? "pending") as PodOriginalStatus;
+    const hasOriginalStatusChange = data.originalStatus !== undefined && data.originalStatus !== currentOriginalStatus;
+
+    if (data.originalStatus !== undefined) {
+      assertPodStatusTransition(currentOriginalStatus, data.originalStatus, podRow[0].businessType);
+      if (hasOriginalStatusChange) {
+        updateData.originalStatus = data.originalStatus;
+        if (data.originalStatus === "pending") {
+          updateData.originalSentAt = null;
+          updateData.originalReceivedAt = null;
+          updateData.originalReceivedBy = null;
+        }
+        if (data.originalStatus === "sent") {
+          updateData.originalSentAt = new Date();
+          updateData.originalReceivedAt = null;
+          updateData.originalReceivedBy = null;
+        }
+        if (data.originalStatus === "received") {
+          updateData.originalReceivedAt = new Date();
+          updateData.originalReceivedBy = ctx.user!.id;
+        }
+        if (data.originalStatus === "lost") {
+          updateData.originalReceivedAt = null;
+          updateData.originalReceivedBy = null;
+        }
+      }
+    }
+    if (data.ocrVerified !== undefined) {
+      updateData.ocrVerified = data.ocrVerified;
+      updateData.ocrVerifiedBy = ctx.user!.id;
+      updateData.ocrVerifiedAt = new Date();
+    }
+    if (data.ocrResult !== undefined) updateData.ocrResult = data.ocrResult;
+    if (data.depositLinked !== undefined) updateData.depositLinked = data.depositLinked;
+    if (data.depositAmount !== undefined) updateData.depositAmount = data.depositAmount;
+    if (data.depositRefunded !== undefined) updateData.depositRefunded = data.depositRefunded;
+    if (data.deliveryNoteUrl !== undefined) updateData.deliveryNoteUrl = data.deliveryNoteUrl;
+
+    if (isSelfBusinessType(podRow[0].businessType)) {
+      if (data.depositLinked !== undefined || data.depositAmount !== undefined || data.depositRefunded !== undefined) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "自运回单不允许处理押金信息" });
+      }
+      updateData.depositLinked = false;
+      updateData.depositAmount = null;
+      updateData.depositRefunded = false;
+    }
+
+    // 查询回单关联的订单（用于反向同步与退押金校验）
+    const relatedOrderId = podRow[0]?.orderId;
+    const relatedOrder = relatedOrderId
+      ? (await db.select({
+          status: orders.status,
+          mergedPlanNumber: orders.mergedPlanNumber,
+          plateNumber: orders.plateNumber,
+          dispatchDate: orders.dispatchDate,
+          depositStatus: orders.depositStatus,
+          businessType: orders.businessType,
+          podOwnership: orders.podOwnership,
+        }).from(orders).where(eq(orders.id, relatedOrderId)).limit(1))[0] as PodRelatedOrderSnapshot | undefined
+      : null;
+
+    // 押金已退还时，必须确保全组回单已收齐，避免绕过批量退押金入口直接收尾
+    if (data.depositRefunded === true && relatedOrderId && relatedOrder) {
+      if (relatedOrder.depositStatus !== "paid") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "该订单押金状态不可退还" });
+      }
+      const groupOrderIds = await resolveGroupOrderIds(db, relatedOrderId, relatedOrder);
+      const groupPods = groupOrderIds.length > 0
+        ? await db.select({ orderId: podRecords.orderId, originalStatus: podRecords.originalStatus }).from(podRecords)
+            .where(inArray(podRecords.orderId, groupOrderIds))
+        : [];
+      const incompleteOrders = groupOrderIds.filter((orderId) => {
+        const groupPod = groupPods.find((item) => item.orderId === orderId);
+        const effectiveStatus = orderId === relatedOrderId && data.originalStatus !== undefined
+          ? data.originalStatus
+          : groupPod?.originalStatus;
+        return effectiveStatus !== "received";
+      });
+      if (incompleteOrders.length > 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "当前合并组仍有回单未收齐，不能退押金。" });
+      }
+    }
+
+    if (Object.keys(updateData).length > 0) {
+      await db.update(podRecords).set(updateData).where(eq(podRecords.id, id));
+    }
+
+    // ========== 回单闭环反向同步 ==========
+    if (relatedOrderId && relatedOrder) {
+      if (hasOriginalStatusChange && data.originalStatus !== undefined) {
+        try {
+          await syncOrderByPodStatus(db, relatedOrderId, data.originalStatus, new Date());
+          if (data.originalStatus !== "received") {
+            const refundGroupOrderIds = await resolveGroupOrderIds(db, relatedOrderId, relatedOrder);
+            await db.update(podRecords).set({
+              depositRefunded: false,
+            }).where(inArray(podRecords.orderId, refundGroupOrderIds));
+          }
+        } catch (e) {
+          console.error("Pod status -> order sync failed:", e);
+        }
+      }
+
+      // ❗ orders.depositStatus 是全系统押金状态的唯一数据源，pod_records.depositRefunded 仅为触发器和展示用
+      if (data.depositRefunded === true) {
+        try {
+          const refundGroupOrderIds = await resolveGroupOrderIds(db, relatedOrderId, relatedOrder);
+          await db.update(podRecords).set({
+            depositRefunded: true,
+          }).where(inArray(podRecords.orderId, refundGroupOrderIds));
+          await db.update(orders).set({
+            depositStatus: "refunded" as any,
+            depositRefundDate: new Date(),
+          }).where(inArray(orders.id, refundGroupOrderIds));
+        } catch (e) {
+          console.error("Pod depositRefunded -> order depositStatus sync failed:", e);
+        }
+      }
+    }
+
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "update",
+      targetType: "pod",
+      targetId: String(id),
+      changes: updateData,
+      description: `${POD_OPERATION_LABELS[(data.operationType as PodOperationType | undefined) || "generic"]}：回单 #${id}${data.originalStatus === "received" ? "（已收回，同步订单状态）" : ""}${data.depositRefunded ? "（押金已退，同步订单押金状态）" : ""}`,
+    });
+
+    return { success: true };
+  }),
+
+  cancelSentOriginal: permissionProcedure(PERMISSIONS.POD_MARK_SENT).input(
+    z.object({
+      id: z.number(),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+
+    const podRow = await db.select({
+      id: podRecords.id,
+      orderId: podRecords.orderId,
+      originalStatus: podRecords.originalStatus,
+      podOwnership: podRecords.podOwnership,
+    }).from(podRecords).where(eq(podRecords.id, input.id)).limit(1);
+
+    if (!podRow[0]) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "回单记录不存在" });
+    }
+    if (!isResponsiblePodOwnership(podRow[0].podOwnership)) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "当前回单不属于可操作的责任单记录。" });
+    }
+    if (podRow[0].originalStatus === "received") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "该回单已财务确认收到，不能撤销寄出。" });
+    }
+    if (podRow[0].originalStatus !== "sent") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "只有已寄出的回单才可以撤销寄出。" });
+    }
+
+    await db.update(podRecords).set({
+      originalStatus: "pending",
+      originalSentAt: null,
+      originalReceivedAt: null,
+      originalReceivedBy: null,
+    }).where(eq(podRecords.id, input.id));
+
+    await syncOrderByPodStatus(db, podRow[0].orderId, "pending", new Date());
+
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "cancel_pod_sent",
+      targetType: "pod",
+      targetId: String(input.id),
+      description: `回单 #${input.id} 已撤销寄出`,
+    });
+
+    return { success: true };
+  }),
+
+  // 批量标记回单为"已收到"（提高操作员处理大量回单时的效率）
+  batchMarkReceived: permissionProcedure(PERMISSIONS.POD_CONFIRM_RECEIVED).input(
+    z.object({
+      ids: z.array(z.number()).min(1, "至少选择一个回单").max(200, "单次最多200个"),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+    const { ids } = input;
+    let successCount = 0;
+    let skipCount = 0;
+    const skippedReasons: { id: number; reason: string }[] = [];
+    const now = new Date();
+
+    for (const podId of ids) {
+      // 查询回单当前状态
+      const podRow = await db.select({
+        id: podRecords.id,
+        orderId: podRecords.orderId,
+        originalStatus: podRecords.originalStatus,
+        podOwnership: podRecords.podOwnership,
+        businessType: orders.businessType,
+      }).from(podRecords)
+        .leftJoin(orders, eq(orders.id, podRecords.orderId))
+        .where(eq(podRecords.id, podId)).limit(1);
+
+      if (!podRow[0]) {
+        skipCount++;
+        skippedReasons.push({ id: podId, reason: "回单不存在" });
+        continue;
+      }
+
+      if (!isResponsiblePodOwnership(podRow[0].podOwnership)) {
+        skipCount++;
+        skippedReasons.push({ id: podId, reason: "当前回单不属于责任单" });
+        continue;
+      }
+
+      const allowDirectReceive = isSelfBusinessType(podRow[0].businessType);
+      if (podRow[0].originalStatus === "received") {
+        skipCount++;
+        skippedReasons.push({ id: podId, reason: "已是已收到状态" });
+        continue;
+      }
+      if (podRow[0].originalStatus === "lost") {
+        skipCount++;
+        skippedReasons.push({ id: podId, reason: "已标记为遗失" });
+        continue;
+      }
+      if (podRow[0].originalStatus !== "sent" && !(allowDirectReceive && podRow[0].originalStatus === "pending")) {
+        skipCount++;
+        skippedReasons.push({ id: podId, reason: allowDirectReceive ? "当前回单状态不允许确认收到" : "回单尚未寄出，不能直接确认收到" });
+        continue;
+      }
+
+      // 更新回单状态为received
+      await db.update(podRecords).set({
+        originalStatus: "received" as any,
+        originalReceivedAt: now,
+        originalReceivedBy: ctx.user!.id,
+        depositLinked: allowDirectReceive ? false : undefined,
+        depositAmount: allowDirectReceive ? null : undefined,
+        depositRefunded: allowDirectReceive ? false : undefined,
+      }).where(eq(podRecords.id, podId));
+
+      // 反向同步主订单状态（与单条 updateStatus 逻辑保持一致）
+      const relatedOrderId = podRow[0].orderId;
+      if (relatedOrderId) {
+        try {
+          await syncOrderByPodStatus(db, relatedOrderId, "received", now);
+        } catch (e) {
+          console.error(`Batch pod received -> order sync failed for order #${relatedOrderId}:`, e);
+        }
+      }
+
+      successCount++;
+    }
+
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "batch_update",
+      targetType: "pod",
+      targetId: ids.join(","),
+      changes: { action: "batch_mark_received", successCount, skipCount, skippedReasons },
+      description: `批量标记回单已收到：成功${successCount}个，跳过${skipCount}个`,
+    });
+
+    return { success: true, successCount, skipCount, skippedReasons };
+  }),
+
+  // 手动触发超期回单分级通知检查
+  checkOverdueAndNotify: protectedProcedure.mutation(async ({ ctx }) => {
+    const result = await checkOverduePods();
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "notify",
+      targetType: "pod",
+      targetId: "overdue_check",
+      description: `超期回单分级检查：黄色${result.yellow}个/橙色${result.orange}个/红色${result.red}个，推送${result.notified}条通知`,
+    });
+    return result;
+  }),
+
+  // 批量检查合并组回单是否全部到齐（供前端退押金按钮禁用判断）
+  checkGroupsReceived: protectedProcedure.input(
+    z.object({ mergedPlanNumbers: z.array(z.string()) })
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return {};
+    const result: Record<string, { allReceived: boolean; allSent: boolean; sentCount: number; receivedCount: number; totalCount: number }> = {};
+    for (const mpn of input.mergedPlanNumbers) {
+      const groupRows = await db.select({ id: orders.id }).from(orders)
+        .where(and(
+          eq(orders.mergedPlanNumber, mpn),
+          eq(orders.podOwnership, "current_order" as any),
+        ));
+      const groupIds = groupRows.map(r => r.id);
+      if (groupIds.length === 0) {
+        result[mpn] = { allReceived: false, allSent: false, sentCount: 0, receivedCount: 0, totalCount: 0 };
+        continue;
+      }
+      const groupPods = await db.select({
+        orderId: podRecords.orderId,
+        originalStatus: podRecords.originalStatus,
+        originalSentAt: podRecords.originalSentAt,
+      }).from(podRecords).where(and(
+        inArray(podRecords.orderId, groupIds),
+        eq(podRecords.podOwnership, "current_order" as any),
+      ));
+      let sentCount = 0;
+      let receivedCount = 0;
+      for (const gid of groupIds) {
+        const pod = groupPods.find(p => p.orderId === gid);
+        if (pod) {
+          if (pod.originalStatus === "received") {
+            receivedCount++;
+            // 只有真正经过寄出环节（有originalSentAt）才算已寄出
+            // 自运订单跳过寄出直接收回，不计入sentCount
+            if (pod.originalSentAt) sentCount++;
+          } else if (pod.originalStatus === "sent") {
+            sentCount++;
+          }
+        }
+      }
+      result[mpn] = {
+        allReceived: receivedCount === groupIds.length,
+        allSent: sentCount === groupIds.length,
+        sentCount,
+        receivedCount,
+        totalCount: groupIds.length,
+      };
+    }
+    return result;
+  }),
+
+  // 获取订单的回单记录
+  getByOrderId: protectedProcedure.input(z.object({ orderId: z.number() })).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return null;
+    const orderRow = await db.select({ podOwnership: orders.podOwnership }).from(orders)
+      .where(eq(orders.id, input.orderId))
+      .limit(1);
+    if (!orderRow[0] || !isResponsiblePodOwnership(orderRow[0].podOwnership)) {
+      return null;
+    }
+    // 按ID降序取最新记录，确保返回最新的回单
+    const rows = await db.select().from(podRecords)
+      .where(and(
+        eq(podRecords.orderId, input.orderId),
+        eq(podRecords.podOwnership, "current_order" as any),
+      ))
+      .orderBy(desc(podRecords.id))
+      .limit(1);
+    return rows[0] ?? null;
+  }),
+});
+
+// 零担询价路由
+export const ltlInquiryRouter = router({
+  // 创建询价
+  create: permissionProcedure("ltl.inquiry").input(
+    z.object({
+      orderId: z.number(),
+      freightStationId: z.number(),
+      finalStationName: z.string().optional(),
+      quotedPrice: optionalDecimal(),
+      remarks: z.string().optional(),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+
+    const result = await db.insert(ltlInquiries).values({
+      orderId: input.orderId,
+      freightStationId: input.freightStationId,
+      finalStationName: input.finalStationName || null,
+      quotedPrice: input.quotedPrice || null,
+      inquiredBy: ctx.user!.id,
+      remarks: input.remarks || null,
+    });
+
+    // 更新订单状态
+    await db.update(orders).set({ status: "pending_inquiry" as any }).where(eq(orders.id, input.orderId));
+
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "create",
+      targetType: "ltl_inquiry",
+      targetId: String(result[0].insertId),
+      description: `创建零担询价，订单#${input.orderId}`,
+    });
+
+    return { id: result[0].insertId };
+  }),
+
+  // 询价列表
+  listByOrder: protectedProcedure.input(z.object({ orderId: z.number() })).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    return db.select().from(ltlInquiries).where(eq(ltlInquiries.orderId, input.orderId)).orderBy(desc(ltlInquiries.createdAt));
+  }),
+
+  // 更新询价（报价/确认）
+  update: protectedProcedure.input(
+    z.object({
+      id: z.number(),
+      quotedPrice: optionalDecimal(),
+      confirmedPrice: optionalDecimal(),
+      inquiryStatus: z.enum(["pending", "quoted", "confirmed", "cancelled"]).optional(),
+      remarks: z.string().optional(),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+    const { id, ...data } = input;
+    const updateData: Record<string, any> = {};
+    if (data.quotedPrice !== undefined) updateData.quotedPrice = data.quotedPrice;
+    if (data.confirmedPrice !== undefined) updateData.confirmedPrice = data.confirmedPrice;
+    if (data.inquiryStatus !== undefined) updateData.inquiryStatus = data.inquiryStatus;
+    if (data.remarks !== undefined) updateData.remarks = data.remarks;
+
+    await db.update(ltlInquiries).set(updateData).where(eq(ltlInquiries.id, id));
+
+    // 如果确认了询价，更新订单状态 + 排他取消其他询价（解决竞态条件）
+    if (data.inquiryStatus === "confirmed") {
+      const inquiry = await db.select().from(ltlInquiries).where(eq(ltlInquiries.id, id)).limit(1);
+      if (inquiry[0]) {
+        // 事务保护：确认报价 + 取消其他询价 + 更新订单状态
+        await db.transaction(async (tx) => {
+          // 1. 排他取消同一订单的其他未确认询价
+          await tx.update(ltlInquiries).set({
+            inquiryStatus: "cancelled",
+          }).where(
+            and(
+              eq(ltlInquiries.orderId, inquiry[0].orderId),
+              ne(ltlInquiries.id, id),
+              inArray(ltlInquiries.inquiryStatus, ["pending", "quoted"])
+            )
+          );
+          // 2. 更新订单状态
+          await tx.update(orders).set({
+            status: "inquiry_confirmed" as any,
+            ltlFinalStation: inquiry[0].finalStationName,
+            ltlFreightPrice: inquiry[0].confirmedPrice ? String(inquiry[0].confirmedPrice) : null,
+            freightStationId: inquiry[0].freightStationId,
+          }).where(eq(orders.id, inquiry[0].orderId));
+        });
+      }
+    }
+
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "update",
+      targetType: "ltl_inquiry",
+      targetId: String(id),
+      changes: updateData,
+      description: `更新零担询价 #${id}`,
+    });
+
+    return { success: true };
+  }),
+});

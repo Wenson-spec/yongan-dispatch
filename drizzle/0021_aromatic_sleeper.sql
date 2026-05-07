@@ -1,0 +1,1 @@
+ALTER TABLE `approvals` MODIFY COLUMN `approvalType` enum('initial_price','vehicle_quote','surcharge') NOT NULL;

@@ -1,0 +1,1 @@
+ALTER TABLE `approvals` ADD `previousStatus` varchar(50);

@@ -1,0 +1,181 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1771959386894,
+      "tag": "0000_worried_big_bertha",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1772005515134,
+      "tag": "0001_freezing_wiccan",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1772065218468,
+      "tag": "0002_flawless_black_widow",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1772116268056,
+      "tag": "0003_worthless_crystal",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1772178019686,
+      "tag": "0004_furry_spot",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1772179256950,
+      "tag": "0005_nosy_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1772199381661,
+      "tag": "0006_polite_orphan",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1772202201160,
+      "tag": "0007_polite_annihilus",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1772213028809,
+      "tag": "0008_rainy_rachel_grey",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1772218065325,
+      "tag": "0009_condemned_speedball",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1772242848835,
+      "tag": "0010_workable_master_chief",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1772247857723,
+      "tag": "0011_jazzy_amphibian",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1772250948786,
+      "tag": "0012_futuristic_trish_tilby",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1772253768290,
+      "tag": "0013_crazy_mindworm",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1772255040150,
+      "tag": "0014_redundant_sharon_carter",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1772256776513,
+      "tag": "0015_optimal_lady_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1772288837942,
+      "tag": "0016_special_miek",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1772313550828,
+      "tag": "0017_lowly_ender_wiggin",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1772375310316,
+      "tag": "0018_unusual_thena",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1772757993467,
+      "tag": "0019_purple_punisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1772760254363,
+      "tag": "0020_overconfident_dazzler",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1772764430247,
+      "tag": "0021_aromatic_sleeper",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1774963637033,
+      "tag": "0022_rich_star_brand",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1775442337069,
+      "tag": "0023_complete_donald_blake",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1775980800000,
+      "tag": "0024_batch18_performance_indexes",
+      "breakpoints": true
+    }
+  ]
+}

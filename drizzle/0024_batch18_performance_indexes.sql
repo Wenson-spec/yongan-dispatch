@@ -1,0 +1,9 @@
+CREATE INDEX `idx_approvals_order_id` ON `approvals` (`orderId`);
+CREATE INDEX `idx_approvals_status` ON `approvals` (`status`);
+CREATE INDEX `idx_pod_records_order_id` ON `pod_records` (`orderId`);
+CREATE INDEX `idx_orders_order_date` ON `orders` (`orderDate`);
+CREATE INDEX `idx_orders_customer_name` ON `orders` (`customerName`);
+CREATE INDEX `idx_orders_receiver_name` ON `orders` (`receiverName`);
+CREATE INDEX `idx_orders_merged_plan_number` ON `orders` (`mergedPlanNumber`);
+CREATE INDEX `idx_orders_plate_number` ON `orders` (`plateNumber`);
+CREATE INDEX `idx_orders_driver_name` ON `orders` (`driverName`);

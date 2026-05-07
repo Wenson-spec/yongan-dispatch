@@ -1,0 +1,1335 @@
+import { z } from "zod";
+import { protectedProcedure, permissionProcedure } from "../_core/trpc";
+import { router } from "../_core/trpc";
+import { getDb } from "../db";
+import { orders, approvals, podRecords, users, operationLogs } from "../../drizzle/schema";
+import { eq, and, desc, count, gte, lte, sql, inArray, isNotNull, like, or } from "drizzle-orm";
+import { safeParseFloat } from "@shared/safeParseFloat";
+
+export const statsRouter = router({
+  // 统计看板数据
+  dashboard: protectedProcedure.input(
+    z.object({
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+    }).optional(),
+  ).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return null;
+
+    const conditions: any[] = [];
+    if (input?.startDate) conditions.push(gte(orders.orderDate, new Date(input.startDate)));
+    if (input?.endDate) conditions.push(lte(orders.orderDate, new Date(input.endDate)));
+
+    const baseWhere = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // 优化：并行执行不同表的查询，合并orders表的多次查询为尽可能少的次数
+    let byType: any[] = [];
+    let byStatus: any[] = [];
+    let urgentCount = 0;
+    let todayNew = 0;
+    let pendingApprovalsCount = 0;
+    let pendingPodsCount = 0;
+    let dailyTrend: any[] = [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+
+    // 并行执行三组查询（orders表、approvals表、podRecords表）
+    const [ordersResults, approvalsResult, podsResult, trendResult] = await Promise.allSettled([
+      // 组1：orders表 - 合并 byType + byStatus + urgent + todayNew 为 3 次查询
+      Promise.allSettled([
+        // 按业务类型统计（包含费用汇总，无法与其他合并）
+        db.select({
+          businessType: orders.businessType,
+          cnt: count(),
+          totalFreight: sql<string>`COALESCE(SUM(CAST(${orders.actualFreight} AS DECIMAL(12,2))), 0)`,
+          totalCost: sql<string>`COALESCE(SUM(CAST(${orders.totalCost} AS DECIMAL(12,2))), 0)`,
+        }).from(orders).where(baseWhere).groupBy(orders.businessType),
+        // 按状态统计（同时统计加急数量，避免单独查询）
+        db.select({
+          status: orders.status,
+          cnt: count(),
+          urgentCnt: sql<number>`SUM(CASE WHEN ${orders.isUrgent} = true THEN 1 ELSE 0 END)`,
+        }).from(orders).where(baseWhere).groupBy(orders.status),
+        // 今日新增
+        db.select({ cnt: count() }).from(orders).where(gte(orders.createdAt, today)),
+      ]),
+      // 组2：待审批数量（仅统计仍有关联订单的审批，避免孤儿审批干扰）
+      db.select({ cnt: count() })
+        .from(approvals)
+        .innerJoin(orders, eq(approvals.orderId, orders.id))
+        .where(eq(approvals.status, "pending")),
+      // 组3：回单待处理
+      db.select({ cnt: count() }).from(podRecords).where(eq(podRecords.originalStatus, "pending")),
+      // 组4：最近7天趋势
+      db.execute(sql.raw(`SELECT DATE_FORMAT(createdAt, '%Y-%m-%d') as \`date\`, COUNT(*) as cnt FROM orders WHERE createdAt >= '${sevenDaysAgoStr}' GROUP BY DATE_FORMAT(createdAt, '%Y-%m-%d') ORDER BY \`date\``)),
+    ]);
+
+    // 解析orders表结果
+    if (ordersResults.status === 'fulfilled') {
+      const [byTypeResult, byStatusResult, todayResult] = ordersResults.value;
+      if (byTypeResult.status === 'fulfilled') byType = byTypeResult.value;
+      if (byStatusResult.status === 'fulfilled') {
+        const statusRows = byStatusResult.value;
+        byStatus = statusRows.map((r: any) => ({ status: r.status, cnt: r.cnt }));
+        // 从状态统计中提取加急订单总数（避免单独查询）
+        urgentCount = statusRows.reduce((sum: number, r: any) => sum + (Number(r.urgentCnt) || 0), 0);
+      }
+      if (todayResult.status === 'fulfilled') todayNew = todayResult.value[0]?.cnt ?? 0;
+    }
+
+    // 解析其他表结果
+    if (approvalsResult.status === 'fulfilled') pendingApprovalsCount = approvalsResult.value[0]?.cnt ?? 0;
+    if (podsResult.status === 'fulfilled') pendingPodsCount = podsResult.value[0]?.cnt ?? 0;
+    if (trendResult.status === 'fulfilled') {
+      const rows = Array.isArray(trendResult.value) ? (Array.isArray((trendResult.value as any)[0]) ? (trendResult.value as any)[0] : trendResult.value) : [];
+      dailyTrend = (rows as any[]).map((r: any) => ({ date: r.date, cnt: Number(r.cnt) }));
+    }
+
+    return {
+      byType,
+      byStatus,
+      urgentCount,
+      todayNew,
+      pendingApprovals: pendingApprovalsCount,
+      pendingPods: pendingPodsCount,
+      dailyTrend,
+    };
+  }),
+
+  // 运价数据库（五档单价格式，按路线聚合，排除大板订单，含同比/环比）
+  freightRates: permissionProcedure("freight_rate.view").input(
+    z.object({
+      originProvince: z.string().optional(),
+      originCity: z.string().optional(),
+      destinationProvince: z.string().optional(),
+      destinationCity: z.string().optional(),
+      cargoSpec: z.string().optional(),
+      businessType: z.enum(["outsource", "ltl"]).optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { items: [], period: '', momPeriod: '', yoyPeriod: '' };
+
+    // 辅助函数：构建基础条件（不含日期）
+    const buildBaseConditions = () => {
+      const conds: any[] = [
+        sql`${orders.actualFreight} IS NOT NULL AND ${orders.actualFreight} != '' AND CAST(${orders.actualFreight} AS DECIMAL(12,4)) > 0`,
+        sql`${orders.weight} IS NOT NULL AND CAST(${orders.weight} AS DECIMAL(12,4)) > 0`,
+        sql`${orders.businessType} != 'self'`,
+        sql`${orders.originCity} IS NOT NULL AND ${orders.originCity} != ''`,
+        sql`${orders.destinationCity} IS NOT NULL AND ${orders.destinationCity} != ''`,
+        sql`(${orders.isLargeSlab} IS NULL OR ${orders.isLargeSlab} = false)`,
+      ];
+      if (input.originProvince) conds.push(sql`${orders.originProvince} LIKE ${`%${input.originProvince}%`}`);
+      if (input.originCity) conds.push(sql`${orders.originCity} LIKE ${`%${input.originCity}%`}`);
+      if (input.destinationProvince) conds.push(sql`${orders.destinationProvince} LIKE ${`%${input.destinationProvince}%`}`);
+      if (input.destinationCity) conds.push(sql`${orders.destinationCity} LIKE ${`%${input.destinationCity}%`}`);
+      if (input.cargoSpec) conds.push(sql`${orders.cargoSpec} LIKE ${`%${input.cargoSpec}%`}`);
+      if (input.businessType) conds.push(eq(orders.businessType, input.businessType));
+      return conds;
+    };
+
+    // 辅助函数：查询并聚合运价数据
+    const queryAndAggregate = async (dateConditions: any[]) => {
+      const conds = [...buildBaseConditions(), ...dateConditions];
+      const allOrders = await db.select({
+        originCity: orders.originCity,
+        originProvince: orders.originProvince,
+        destinationCity: orders.destinationCity,
+        destinationProvince: orders.destinationProvince,
+        weight: orders.weight,
+        actualFreight: orders.actualFreight,
+        ltlUnitPrice: orders.ltlUnitPrice,
+        ltlDeliveryFee: orders.ltlDeliveryFee,
+        businessType: orders.businessType,
+        chargeableWeight: orders.chargeableWeight,
+        isLargeSlab: orders.isLargeSlab,
+      }).from(orders).where(and(...conds)).orderBy(orders.originProvince, orders.originCity);
+
+      const routeMap = new Map<string, {
+        originProvince: string; originCity: string;
+        destinationProvince: string; destinationCity: string;
+        tier1: number[]; tier2: number[]; tier3: number[]; tier4: number[]; tier5: number[];
+        deliveryFees: number[]; orderCount: number;
+      }>();
+
+      for (const o of allOrders) {
+        if (!o.originCity || !o.destinationCity) continue;
+        const key = `${o.originProvince || ''}|${o.originCity}|${o.destinationProvince || ''}|${o.destinationCity}`;
+        if (!routeMap.has(key)) {
+          routeMap.set(key, {
+            originProvince: o.originProvince || '', originCity: o.originCity,
+            destinationProvince: o.destinationProvince || '', destinationCity: o.destinationCity,
+            tier1: [], tier2: [], tier3: [], tier4: [], tier5: [],
+            deliveryFees: [], orderCount: 0,
+          });
+        }
+        const route = routeMap.get(key)!;
+        route.orderCount++;
+        const actualW = safeParseFloat(o.weight);
+        const freight = safeParseFloat(o.actualFreight);
+        const chargeableW = o.chargeableWeight ? safeParseFloat(o.chargeableWeight) : 0;
+        const isLargeSlabFtl = o.isLargeSlab && o.businessType !== 'ltl' && chargeableW >= 32;
+        const w = isLargeSlabFtl ? chargeableW : actualW;
+        const unitPrice = o.ltlUnitPrice ? safeParseFloat(o.ltlUnitPrice) : (w > 0 ? freight / w : 0);
+        if (o.ltlDeliveryFee) route.deliveryFees.push(safeParseFloat(o.ltlDeliveryFee));
+        if (unitPrice > 0) {
+          if (w <= 0.5) route.tier1.push(unitPrice);
+          else if (w <= 5) route.tier2.push(unitPrice);
+          else if (w <= 15) route.tier3.push(unitPrice);
+          else if (w <= 30) route.tier4.push(unitPrice);
+          else route.tier5.push(unitPrice);
+        }
+      }
+
+      const avg = (arr: number[]) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100 : null;
+      const result = new Map<string, {
+        tier1Price: number | null; tier2Price: number | null; tier3Price: number | null;
+        tier4Price: number | null; tier5Price: number | null;
+        avgDeliveryFee: number | null; orderCount: number;
+      }>();
+      Array.from(routeMap.entries()).forEach(([key, r]) => {
+        result.set(key, {
+          tier1Price: avg(r.tier1), tier2Price: avg(r.tier2), tier3Price: avg(r.tier3),
+          tier4Price: avg(r.tier4), tier5Price: avg(r.tier5),
+          avgDeliveryFee: avg(r.deliveryFees), orderCount: r.orderCount,
+        });
+      });
+      return { routeMap, result };
+    };
+
+    // 计算涨跌幅百分比
+    const calcChange = (current: number | null, previous: number | null): number | null => {
+      if (current === null || previous === null || previous === 0) return null;
+      return Math.round((current - previous) / previous * 10000) / 100; // 保留两位小数
+    };
+
+    // 确定当前查询的时间段
+    let curStart: Date, curEnd: Date;
+    if (input.startDate && input.endDate) {
+      curStart = new Date(input.startDate);
+      curEnd = new Date(input.endDate);
+    } else if (input.startDate) {
+      curStart = new Date(input.startDate);
+      curEnd = new Date();
+    } else if (input.endDate) {
+      // 默认查最近一个月
+      curEnd = new Date(input.endDate);
+      curStart = new Date(curEnd.getFullYear(), curEnd.getMonth() - 1, curEnd.getDate());
+    } else {
+      // 无日期筛选时，默认查当月
+      const now = new Date();
+      curStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      curEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    }
+
+    // 计算环比时间段（上月同期）
+    const diffMs = curEnd.getTime() - curStart.getTime();
+    const momStart = new Date(curStart.getTime() - diffMs - 86400000); // 上一个同等时间段
+    const momEnd = new Date(curStart.getTime() - 86400000);
+    // 计算同比时间段（去年同期）
+    const yoyStart = new Date(curStart.getFullYear() - 1, curStart.getMonth(), curStart.getDate());
+    const yoyEnd = new Date(curEnd.getFullYear() - 1, curEnd.getMonth(), curEnd.getDate());
+
+    // 并行查询三个时间段
+    const [currentData, momData, yoyData] = await Promise.all([
+      queryAndAggregate([gte(orders.orderDate, curStart), lte(orders.orderDate, curEnd)]),
+      queryAndAggregate([gte(orders.orderDate, momStart), lte(orders.orderDate, momEnd)]),
+      queryAndAggregate([gte(orders.orderDate, yoyStart), lte(orders.orderDate, yoyEnd)]),
+    ]);
+
+    // 合并结果
+    const items = Array.from(currentData.routeMap.entries()).map(([key, r]) => {
+      const cur = currentData.result.get(key)!;
+      const mom = momData.result.get(key);
+      const yoy = yoyData.result.get(key);
+
+      return {
+        originProvince: r.originProvince, originCity: r.originCity,
+        destinationProvince: r.destinationProvince, destinationCity: r.destinationCity,
+        tier1Price: cur.tier1Price, tier2Price: cur.tier2Price, tier3Price: cur.tier3Price,
+        tier4Price: cur.tier4Price, tier5Price: cur.tier5Price,
+        avgDeliveryFee: cur.avgDeliveryFee, orderCount: cur.orderCount,
+        // 环比（vs上月/上期）
+        mom: {
+          tier1: calcChange(cur.tier1Price, mom?.tier1Price ?? null),
+          tier2: calcChange(cur.tier2Price, mom?.tier2Price ?? null),
+          tier3: calcChange(cur.tier3Price, mom?.tier3Price ?? null),
+          tier4: calcChange(cur.tier4Price, mom?.tier4Price ?? null),
+          tier5: calcChange(cur.tier5Price, mom?.tier5Price ?? null),
+        },
+        // 同比（vs去年同期）
+        yoy: {
+          tier1: calcChange(cur.tier1Price, yoy?.tier1Price ?? null),
+          tier2: calcChange(cur.tier2Price, yoy?.tier2Price ?? null),
+          tier3: calcChange(cur.tier3Price, yoy?.tier3Price ?? null),
+          tier4: calcChange(cur.tier4Price, yoy?.tier4Price ?? null),
+          tier5: calcChange(cur.tier5Price, yoy?.tier5Price ?? null),
+        },
+      };
+    });
+
+    const fmtDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    return {
+      items,
+      period: `${fmtDate(curStart)} ~ ${fmtDate(curEnd)}`,
+      momPeriod: `${fmtDate(momStart)} ~ ${fmtDate(momEnd)}`,
+      yoyPeriod: `${fmtDate(yoyStart)} ~ ${fmtDate(yoyEnd)}`,
+    };
+  }),
+
+  // 大板运价专区（只统计零担大板）
+  largeSlabRates: permissionProcedure("freight_rate.view").input(
+    z.object({
+      originProvince: z.string().optional(),
+      originCity: z.string().optional(),
+      destinationProvince: z.string().optional(),
+      destinationCity: z.string().optional(),
+      cargoSpec: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { items: [] };
+
+    const conditions: any[] = [
+      sql`${orders.isLargeSlab} = true`,
+      sql`${orders.businessType} = 'ltl'`,
+      sql`${orders.originCity} IS NOT NULL AND ${orders.originCity} != ''`,
+      sql`${orders.destinationCity} IS NOT NULL AND ${orders.destinationCity} != ''`,
+    ];
+    if (input.originProvince) conditions.push(sql`${orders.originProvince} LIKE ${`%${input.originProvince}%`}`);
+    if (input.originCity) conditions.push(sql`${orders.originCity} LIKE ${`%${input.originCity}%`}`);
+    if (input.destinationProvince) conditions.push(sql`${orders.destinationProvince} LIKE ${`%${input.destinationProvince}%`}`);
+    if (input.destinationCity) conditions.push(sql`${orders.destinationCity} LIKE ${`%${input.destinationCity}%`}`);
+    if (input.cargoSpec) conditions.push(sql`${orders.cargoSpec} LIKE ${`%${input.cargoSpec}%`}`);
+    if (input.startDate) conditions.push(gte(orders.orderDate, new Date(input.startDate)));
+    if (input.endDate) conditions.push(lte(orders.orderDate, new Date(input.endDate)));
+
+    const whereClause = and(...conditions);
+
+    const allOrders = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      businessType: orders.businessType,
+      customerName: orders.customerName,
+      cargoName: orders.cargoName,
+      cargoSpec: orders.cargoSpec,
+      originProvince: orders.originProvince,
+      originCity: orders.originCity,
+      destinationProvince: orders.destinationProvince,
+      destinationCity: orders.destinationCity,
+      weight: orders.weight,
+      chargeableWeight: orders.chargeableWeight,
+      packageCount: orders.packageCount,
+      actualFreight: orders.actualFreight,
+      ltlDeliveryFee: orders.ltlDeliveryFee,
+      ltlOtherFee: orders.ltlOtherFee,
+      totalCost: orders.totalCost,
+      plateNumber: orders.plateNumber,
+      orderDate: orders.orderDate,
+    }).from(orders).where(whereClause).orderBy(desc(orders.orderDate));
+
+    // 按路线聚合零担大板运价
+    const routeMap = new Map<string, {
+      originProvince: string;
+      originCity: string;
+      destinationProvince: string;
+      destinationCity: string;
+      ltlPerPackagePrices: number[]; // 元/架（总额/架数）
+      ltlTotalCosts: number[]; // 总额
+      ltlPackageCounts: number[]; // 架数
+      orderCount: number;
+      orders: typeof allOrders;
+    }>();
+
+    for (const o of allOrders) {
+      if (!o.originCity || !o.destinationCity) continue;
+      const key = `${o.originProvince || ''}|${o.originCity}|${o.destinationProvince || ''}|${o.destinationCity}`;
+      if (!routeMap.has(key)) {
+        routeMap.set(key, {
+          originProvince: o.originProvince || '',
+          originCity: o.originCity,
+          destinationProvince: o.destinationProvince || '',
+          destinationCity: o.destinationCity,
+          ltlPerPackagePrices: [], ltlTotalCosts: [], ltlPackageCounts: [],
+          orderCount: 0,
+          orders: [],
+        });
+      }
+      const route = routeMap.get(key)!;
+      route.orderCount++;
+      route.orders.push(o);
+
+      const freight = safeParseFloat(o.actualFreight);
+      const deliveryFee = safeParseFloat(o.ltlDeliveryFee);
+      const otherFee = safeParseFloat(o.ltlOtherFee);
+      const total = safeParseFloat(o.totalCost) || (freight + deliveryFee + otherFee);
+      const pkgCount = o.packageCount || 0;
+
+      // 只统计零担大板：元/架 = 总额 / 架数
+      if (pkgCount > 0 && total > 0) {
+        route.ltlPerPackagePrices.push(total / pkgCount);
+        route.ltlTotalCosts.push(total);
+        route.ltlPackageCounts.push(pkgCount);
+      }
+    }
+
+    const avg = (arr: number[]) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+
+    const items = Array.from(routeMap.values())
+      .filter(r => r.ltlPerPackagePrices.length > 0)
+      .map(r => ({
+        originProvince: r.originProvince,
+        originCity: r.originCity,
+        destinationProvince: r.destinationProvince,
+        destinationCity: r.destinationCity,
+        // 零担大板统计
+        ltlAvgPerPackage: avg(r.ltlPerPackagePrices), // 平均元/架
+        ltlAvgTotal: avg(r.ltlTotalCosts), // 平均总额
+        ltlAvgPackageCount: avg(r.ltlPackageCounts), // 平均架数
+        ltlCount: r.ltlPerPackagePrices.length,
+        orderCount: r.orderCount,
+        recentOrders: r.orders.slice(0, 10), // 最近10条明细
+      }));
+
+    return { items };
+  }),
+
+  // 大板整车运价专区（独立于普通运价30吨以上档）
+  largeSlabFtlRates: permissionProcedure("freight_rate.view").input(
+    z.object({
+      originProvince: z.string().optional(),
+      originCity: z.string().optional(),
+      destinationProvince: z.string().optional(),
+      destinationCity: z.string().optional(),
+      cargoSpec: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { items: [] };
+
+    const conditions: any[] = [
+      sql`${orders.isLargeSlab} = true`,
+      sql`${orders.businessType} != 'ltl'`,
+      sql`${orders.actualFreight} IS NOT NULL AND ${orders.actualFreight} != '' AND CAST(${orders.actualFreight} AS DECIMAL(12,4)) > 0`,
+      sql`${orders.originCity} IS NOT NULL AND ${orders.originCity} != ''`,
+      sql`${orders.destinationCity} IS NOT NULL AND ${orders.destinationCity} != ''`,
+      sql`(
+        (${orders.chargeableWeight} IS NOT NULL AND CAST(${orders.chargeableWeight} AS DECIMAL(12,4)) > 0)
+        OR (${orders.weight} IS NOT NULL AND CAST(${orders.weight} AS DECIMAL(12,4)) > 0)
+      )`,
+    ];
+    if (input.originProvince) conditions.push(sql`${orders.originProvince} LIKE ${`%${input.originProvince}%`}`);
+    if (input.originCity) conditions.push(sql`${orders.originCity} LIKE ${`%${input.originCity}%`}`);
+    if (input.destinationProvince) conditions.push(sql`${orders.destinationProvince} LIKE ${`%${input.destinationProvince}%`}`);
+    if (input.destinationCity) conditions.push(sql`${orders.destinationCity} LIKE ${`%${input.destinationCity}%`}`);
+    if (input.cargoSpec) conditions.push(sql`${orders.cargoSpec} LIKE ${`%${input.cargoSpec}%`}`);
+    if (input.startDate) conditions.push(gte(orders.orderDate, new Date(input.startDate)));
+    if (input.endDate) conditions.push(lte(orders.orderDate, new Date(input.endDate)));
+
+    const allOrders = await db.select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      businessType: orders.businessType,
+      customerName: orders.customerName,
+      cargoName: orders.cargoName,
+      cargoSpec: orders.cargoSpec,
+      originProvince: orders.originProvince,
+      originCity: orders.originCity,
+      destinationProvince: orders.destinationProvince,
+      destinationCity: orders.destinationCity,
+      weight: orders.weight,
+      chargeableWeight: orders.chargeableWeight,
+      actualFreight: orders.actualFreight,
+      totalCost: orders.totalCost,
+      plateNumber: orders.plateNumber,
+      orderDate: orders.orderDate,
+    }).from(orders).where(and(...conditions)).orderBy(desc(orders.orderDate));
+
+    const routeMap = new Map<string, {
+      originProvince: string;
+      originCity: string;
+      destinationProvince: string;
+      destinationCity: string;
+      unitPrices: number[];
+      freightTotals: number[];
+      chargeableWeights: number[];
+      cargoSpecs: Set<string>;
+      orderCount: number;
+      orders: typeof allOrders;
+    }>();
+
+    for (const o of allOrders) {
+      if (!o.originCity || !o.destinationCity) continue;
+      const key = `${o.originProvince || ''}|${o.originCity}|${o.destinationProvince || ''}|${o.destinationCity}`;
+      if (!routeMap.has(key)) {
+        routeMap.set(key, {
+          originProvince: o.originProvince || '',
+          originCity: o.originCity,
+          destinationProvince: o.destinationProvince || '',
+          destinationCity: o.destinationCity,
+          unitPrices: [],
+          freightTotals: [],
+          chargeableWeights: [],
+          cargoSpecs: new Set<string>(),
+          orderCount: 0,
+          orders: [],
+        });
+      }
+
+      const route = routeMap.get(key)!;
+      route.orderCount++;
+      route.orders.push(o);
+      if (o.cargoSpec) route.cargoSpecs.add(o.cargoSpec);
+
+      const freight = safeParseFloat(o.actualFreight);
+      const effectiveWeight = safeParseFloat(o.chargeableWeight) || safeParseFloat(o.weight);
+      if (freight > 0 && effectiveWeight > 0) {
+        route.unitPrices.push(freight / effectiveWeight);
+        route.freightTotals.push(freight);
+        route.chargeableWeights.push(effectiveWeight);
+      }
+    }
+
+    const avg = (arr: number[]) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 100) / 100 : null;
+
+    const items = Array.from(routeMap.values())
+      .filter((r) => r.unitPrices.length > 0)
+      .map((r) => ({
+        originProvince: r.originProvince,
+        originCity: r.originCity,
+        destinationProvince: r.destinationProvince,
+        destinationCity: r.destinationCity,
+        slabFtlAvgUnitPrice: avg(r.unitPrices),
+        slabFtlAvgFreight: avg(r.freightTotals),
+        slabFtlAvgChargeableWeight: avg(r.chargeableWeights),
+        cargoSpecSummary: Array.from(r.cargoSpecs).slice(0, 3).join(" / "),
+        orderCount: r.orderCount,
+        recentOrders: r.orders.slice(0, 10),
+      }));
+
+    return { items };
+  }),
+
+  // 运价数据库明细（支持月份筛选）
+  freightRateDetails: permissionProcedure("freight_rate.view").input(
+    z.object({
+      originCity: z.string(),
+      destinationCity: z.string(),
+      cargoSpec: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      page: z.number().default(1),
+      pageSize: z.number().default(50),
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { items: [], total: 0 };
+
+    const conditions: any[] = [
+      sql`${orders.actualFreight} IS NOT NULL AND ${orders.actualFreight} != ''`,
+      sql`${orders.businessType} != 'self'`,
+      sql`${orders.originCity} = ${input.originCity}`,
+      sql`${orders.destinationCity} = ${input.destinationCity}`,
+      sql`(${orders.isLargeSlab} IS NULL OR ${orders.isLargeSlab} = false)`,
+    ];
+    if (input.cargoSpec) conditions.push(sql`${orders.cargoSpec} LIKE ${`%${input.cargoSpec}%`}`);
+    if (input.startDate) conditions.push(gte(orders.orderDate, new Date(input.startDate)));
+    if (input.endDate) conditions.push(lte(orders.orderDate, new Date(input.endDate)));
+    const whereClause = and(...conditions);
+
+    const [items, totalResult] = await Promise.all([
+      db.select({
+        id: orders.id,
+        orderNumber: orders.orderNumber,
+        businessType: orders.businessType,
+        customerName: orders.customerName,
+        cargoName: orders.cargoName,
+        cargoSpec: orders.cargoSpec,
+        weight: orders.weight,
+        chargeableWeight: orders.chargeableWeight,
+        actualFreight: orders.actualFreight,
+        ltlUnitPrice: orders.ltlUnitPrice,
+        ltlDeliveryFee: orders.ltlDeliveryFee,
+        ltlOtherFee: orders.ltlOtherFee,
+        totalCost: orders.totalCost,
+        plateNumber: orders.plateNumber,
+        isLargeSlab: orders.isLargeSlab,
+        orderDate: orders.orderDate,
+      }).from(orders).where(whereClause)
+        .orderBy(desc(orders.orderDate))
+        .limit(input.pageSize)
+        .offset((input.page - 1) * input.pageSize),
+      db.select({ cnt: count() }).from(orders).where(whereClause),
+    ]);
+
+    return { items, total: totalResult[0]?.cnt ?? 0 };
+  }),
+
+  // 运价趋势（按月聚合，支持多路线对比）
+  freightRateTrend: permissionProcedure("freight_rate.view").input(
+    z.object({
+      routes: z.array(z.object({
+        originCity: z.string(),
+        destinationCity: z.string(),
+      })).min(1).max(5),
+      tier: z.enum(["tier1", "tier2", "tier3", "tier4", "tier5"]).default("tier5"),
+      months: z.number().min(3).max(24).default(6), // 最近N个月
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { series: [] };
+
+    // 计算起始日期
+    const now = new Date();
+    const startDate = new Date(now.getFullYear(), now.getMonth() - input.months + 1, 1);
+
+    // 重量范围映射
+    const tierRanges: Record<string, { min: number; max: number; label: string }> = {
+      tier1: { min: 0, max: 0.5, label: '500kg以下' },
+      tier2: { min: 0.5, max: 5, label: '0.5-5吨' },
+      tier3: { min: 5, max: 15, label: '5-15吨' },
+      tier4: { min: 15, max: 30, label: '15-30吨' },
+      tier5: { min: 30, max: 999999, label: '30吨以上' },
+    };
+    const range = tierRanges[input.tier];
+
+    const series: Array<{
+      route: string;
+      originCity: string;
+      destinationCity: string;
+      data: Array<{ month: string; avgPrice: number | null; orderCount: number }>;
+    }> = [];
+
+    for (const route of input.routes) {
+      const conditions: any[] = [
+        sql`${orders.actualFreight} IS NOT NULL AND CAST(${orders.actualFreight} AS DECIMAL(12,4)) > 0`,
+        sql`${orders.weight} IS NOT NULL AND CAST(${orders.weight} AS DECIMAL(12,4)) > 0`,
+        sql`${orders.businessType} != 'self'`,
+        sql`${orders.originCity} = ${route.originCity}`,
+        sql`${orders.destinationCity} = ${route.destinationCity}`,
+        sql`(${orders.isLargeSlab} IS NULL OR ${orders.isLargeSlab} = false)`,
+        gte(orders.orderDate, startDate),
+      ];
+
+      const routeOrders = await db.select({
+        weight: orders.weight,
+        actualFreight: orders.actualFreight,
+        ltlUnitPrice: orders.ltlUnitPrice,
+        chargeableWeight: orders.chargeableWeight,
+        isLargeSlab: orders.isLargeSlab,
+        businessType: orders.businessType,
+        orderDate: orders.orderDate,
+      }).from(orders).where(and(...conditions));
+
+      // 按月聚合
+      const monthMap = new Map<string, number[]>();
+      // 预填所有月份
+      for (let i = 0; i < input.months; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - input.months + 1 + i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        monthMap.set(key, []);
+      }
+
+      for (const o of routeOrders) {
+        if (!o.orderDate) continue;
+        const d = new Date(o.orderDate);
+        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthMap.has(monthKey)) continue;
+
+        const actualW = safeParseFloat(o.weight);
+        const chargeableW = o.chargeableWeight ? safeParseFloat(o.chargeableWeight) : 0;
+        const isLargeSlabFtl = o.isLargeSlab && o.businessType !== 'ltl' && chargeableW >= 32;
+        const w = isLargeSlabFtl ? chargeableW : actualW;
+        const freight = safeParseFloat(o.actualFreight);
+        const unitPrice = o.ltlUnitPrice ? safeParseFloat(o.ltlUnitPrice) : (w > 0 ? freight / w : 0);
+
+        // 按重量档位筛选
+        if (w > range.min && w <= range.max && unitPrice > 0) {
+          monthMap.get(monthKey)!.push(unitPrice);
+        }
+        // 大板整车特殊处理：始终归入tier5
+        if (isLargeSlabFtl && input.tier === 'tier5' && unitPrice > 0) {
+          if (!(w > range.min && w <= range.max)) {
+            monthMap.get(monthKey)!.push(unitPrice);
+          }
+        }
+      }
+
+      const data = Array.from(monthMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([month, prices]) => ({
+          month,
+          avgPrice: prices.length > 0 ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : null,
+          orderCount: prices.length,
+        }));
+
+      series.push({
+        route: `${route.originCity} → ${route.destinationCity}`,
+        originCity: route.originCity,
+        destinationCity: route.destinationCity,
+        data,
+      });
+    }
+
+    return { series, tier: tierRanges[input.tier].label };
+  }),
+
+  // 获取所有已有路线（用于路线选择器）
+  availableRoutes: permissionProcedure("freight_rate.view").query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+
+    const routes = await db.selectDistinct({
+      originCity: orders.originCity,
+      destinationCity: orders.destinationCity,
+    }).from(orders).where(
+      and(
+        sql`${orders.originCity} IS NOT NULL AND ${orders.originCity} != ''`,
+        sql`${orders.destinationCity} IS NOT NULL AND ${orders.destinationCity} != ''`,
+        sql`${orders.actualFreight} IS NOT NULL AND CAST(${orders.actualFreight} AS DECIMAL(12,4)) > 0`,
+        sql`${orders.businessType} != 'self'`,
+      )
+    );
+
+    return routes.filter(r => r.originCity && r.destinationCity).map(r => ({
+      originCity: r.originCity!,
+      destinationCity: r.destinationCity!,
+      label: `${r.originCity} → ${r.destinationCity}`,
+    }));
+  }),
+
+  // 客户台账（按客户汇总）
+  customerLedger: permissionProcedure("export.customer_ledger").input(
+    z.object({
+      customerId: z.number().optional(),
+      customerName: z.string().optional(),
+      keyword: z.string().optional(),
+      businessType: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return [];
+
+    const conditions: any[] = [];
+    if (input.customerId) conditions.push(eq(orders.customerId, input.customerId));
+    if (input.businessType) conditions.push(sql`${orders.businessType} = ${input.businessType}`);
+    // keyword支持搜索：客户名、订单号、系统编号、货站名称、运单号
+    if (input.keyword) {
+      conditions.push(
+        sql`(${orders.customerName} LIKE ${`%${input.keyword}%`}
+          OR ${orders.orderNumber} LIKE ${`%${input.keyword}%`}
+          OR ${orders.systemCode} LIKE ${`%${input.keyword}%`}
+          OR ${orders.freightStationName} LIKE ${`%${input.keyword}%`}
+          OR ${orders.freightWaybillNumber} LIKE ${`%${input.keyword}%`})`
+      );
+    } else if (input.customerName) {
+      conditions.push(sql`${orders.customerName} LIKE ${`%${input.customerName}%`}`);
+    }
+    if (input.startDate) conditions.push(gte(orders.orderDate, new Date(input.startDate)));
+    if (input.endDate) conditions.push(lte(orders.orderDate, new Date(input.endDate)));
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    return db.select({
+      id: orders.id,
+      systemCode: orders.systemCode,
+      orderNumber: orders.orderNumber,
+      mergedPlanNumber: orders.mergedPlanNumber,
+      customerPrice: orders.customerPrice,
+      businessType: orders.businessType,
+      department: orders.department,
+      isUrgent: orders.isUrgent,
+      customerName: orders.customerName,
+      customerPhone: orders.customerPhone,
+      settlementType: orders.settlementType,
+      cargoName: orders.cargoName,
+      weight: orders.weight,
+      packagingType: orders.packagingType,
+      originCity: orders.originCity,
+      destinationCity: orders.destinationCity,
+      receiverName: orders.receiverName,
+      receiverPhone: orders.receiverPhone,
+      quotedPrice: orders.quotedPrice,
+      actualFreight: orders.actualFreight,
+      deliveryFee: orders.deliveryFee,
+      extraFee: orders.extraFee,
+      totalCost: orders.totalCost,
+      plateNumber: orders.plateNumber,
+      driverName: orders.driverName,
+      status: orders.status,
+      orderDate: orders.orderDate,
+      freightWaybillNumber: orders.freightWaybillNumber,
+      inquiryPhone: orders.inquiryPhone,
+      ltlUnitPrice: orders.ltlUnitPrice,
+      ltlDeliveryFee: orders.ltlDeliveryFee,
+      ltlOtherFee: orders.ltlOtherFee,
+      freightStationName: orders.freightStationName,
+      isLargeSlab: orders.isLargeSlab,
+      stationReceiptUrl: orders.stationReceiptUrl,
+      dispatchPrice: orders.dispatchPrice,
+    }).from(orders).where(whereClause).orderBy(desc(orders.orderDate));
+  }),
+
+  // 操作日志查询
+  operationLogs: permissionProcedure("log.view").input(
+    z.object({
+      page: z.number().default(1),
+      pageSize: z.number().default(50),
+      action: z.string().optional(),
+      targetType: z.string().optional(),
+      userId: z.number().optional(),
+      keyword: z.string().optional(),
+    }),
+  ).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { items: [], total: 0 };
+    const { operationLogs } = await import("../../drizzle/schema");
+
+    const conditions: any[] = [];
+    if (input.action) conditions.push(eq(operationLogs.action, input.action));
+    if (input.targetType) conditions.push(eq(operationLogs.targetType, input.targetType));
+    if (input.userId) conditions.push(eq(operationLogs.userId, input.userId));
+    if (input.keyword) {
+      conditions.push(
+        sql`(${operationLogs.userName} LIKE ${`%${input.keyword}%`} OR ${operationLogs.description} LIKE ${`%${input.keyword}%`})`
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [items, totalResult] = await Promise.all([
+      db.select().from(operationLogs).where(whereClause)
+        .orderBy(desc(operationLogs.createdAt))
+        .limit(input.pageSize)
+        .offset((input.page - 1) * input.pageSize),
+      db.select({ cnt: count() }).from(operationLogs).where(whereClause),
+    ]);
+
+    return { items, total: totalResult[0]?.cnt ?? 0 };
+  }),
+
+  // 调度效率分析 + 发货时效监控
+  dispatchEfficiency: protectedProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return null;
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterdayStart = new Date(todayStart.getTime() - 86400000);
+    const weekStart = new Date(todayStart.getTime() - todayStart.getDay() * 86400000);
+    const lastWeekStart = new Date(weekStart.getTime() - 7 * 86400000);
+
+    const stationStatuses: Record<string, string[]> = {
+      "录单台": ["pending_assign"],
+      "指挥台": ["pending_price", "pending_approval"],
+      "找车台": ["pending_vehicle"],
+      "派车台": ["pending_dispatch"],
+      "询价台": ["pending_inquiry", "inquiry_confirmed"],
+    };
+
+    // 1. 各工位平均处理时间
+    let stationAvgHours: Record<string, number> = {};
+    try {
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
+      const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().slice(0, 19).replace('T', ' ');
+      const [statusChanges] = await db.execute(sql.raw(`
+        SELECT targetId as orderId, description, createdAt
+        FROM operation_logs 
+        WHERE action = 'status_change' AND targetType = 'order' AND createdAt >= '${thirtyDaysAgoStr}'
+        ORDER BY targetId, createdAt
+      `)) as any;
+
+      if (statusChanges && statusChanges.length > 0) {
+        const orderChanges = new Map<string, Array<{ status: string; time: Date }>>();
+        for (const row of statusChanges) {
+          const orderId = String(row.orderId);
+          if (!orderChanges.has(orderId)) orderChanges.set(orderId, []);
+          const desc = String(row.description || '');
+          const statusMatch = desc.match(/→\s*(\S+)/) || desc.match(/变更为[\s:]*([\w_]+)/);
+          if (statusMatch) {
+            orderChanges.get(orderId)!.push({ status: statusMatch[1], time: new Date(row.createdAt) });
+          }
+        }
+        const stationDurations: Record<string, number[]> = {};
+        for (const [, changes] of Array.from(orderChanges)) {
+          for (let i = 0; i < changes.length - 1; i++) {
+            const currentStatus = changes[i].status;
+            const durationHours = (changes[i + 1].time.getTime() - changes[i].time.getTime()) / 3600000;
+            if (durationHours > 0 && durationHours < 720) {
+              for (const [station, statuses] of Object.entries(stationStatuses)) {
+                if (statuses.includes(currentStatus)) {
+                  if (!stationDurations[station]) stationDurations[station] = [];
+                  stationDurations[station].push(durationHours);
+                }
+              }
+            }
+          }
+        }
+        for (const [station, durations] of Object.entries(stationDurations)) {
+          if (durations.length > 0) {
+            stationAvgHours[station] = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length * 10) / 10;
+          }
+        }
+      }
+    } catch (e) { console.error("Station avg hours error:", e); }
+
+    // 2. 各工位当前积压
+    let stationBacklog: Array<{ station: string; total: number; over24h: number; over48h: number; maxWaitHours: number }> = [];
+    try {
+      for (const [station, statuses] of Object.entries(stationStatuses)) {
+        const statusList = statuses.map(s => `'${s}'`).join(',');
+        const [result] = await db.execute(sql.raw(`
+          SELECT COUNT(*) as total,
+            SUM(CASE WHEN TIMESTAMPDIFF(HOUR, createdAt, NOW()) > 24 THEN 1 ELSE 0 END) as over24h,
+            SUM(CASE WHEN TIMESTAMPDIFF(HOUR, createdAt, NOW()) > 48 THEN 1 ELSE 0 END) as over48h,
+            MAX(TIMESTAMPDIFF(HOUR, createdAt, NOW())) as maxWaitHours
+          FROM orders WHERE status IN (${statusList}) AND status != 'cancelled'
+        `)) as any;
+        if (result && result[0]) {
+          stationBacklog.push({
+            station, total: Number(result[0].total) || 0,
+            over24h: Number(result[0].over24h) || 0, over48h: Number(result[0].over48h) || 0,
+            maxWaitHours: Math.round(Number(result[0].maxWaitHours) || 0),
+          });
+        }
+      }
+    } catch (e) { console.error("Station backlog error:", e); }
+
+    // 3. 今日vs昨日 / 本周vs上周
+    let todayProcessed = 0, yesterdayProcessed = 0, thisWeekProcessed = 0, lastWeekProcessed = 0;
+    try {
+      const todayStr = todayStart.toISOString().slice(0, 19).replace('T', ' ');
+      const yesterdayStr = yesterdayStart.toISOString().slice(0, 19).replace('T', ' ');
+      const weekStartStr = weekStart.toISOString().slice(0, 19).replace('T', ' ');
+      const lastWeekStartStr = lastWeekStart.toISOString().slice(0, 19).replace('T', ' ');
+      const [t] = await db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM operation_logs WHERE action='status_change' AND targetType='order' AND createdAt>='${todayStr}'`)) as any;
+      todayProcessed = Number(t?.[0]?.cnt) || 0;
+      const [y] = await db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM operation_logs WHERE action='status_change' AND targetType='order' AND createdAt>='${yesterdayStr}' AND createdAt<'${todayStr}'`)) as any;
+      yesterdayProcessed = Number(y?.[0]?.cnt) || 0;
+      const [tw] = await db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM operation_logs WHERE action='status_change' AND targetType='order' AND createdAt>='${weekStartStr}'`)) as any;
+      thisWeekProcessed = Number(tw?.[0]?.cnt) || 0;
+      const [lw] = await db.execute(sql.raw(`SELECT COUNT(*) as cnt FROM operation_logs WHERE action='status_change' AND targetType='order' AND createdAt>='${lastWeekStartStr}' AND createdAt<'${weekStartStr}'`)) as any;
+      lastWeekProcessed = Number(lw?.[0]?.cnt) || 0;
+    } catch (e) { console.error("Processed count error:", e); }
+
+    return {
+      stationAvgHours, stationBacklog,
+      comparison: {
+        todayProcessed, yesterdayProcessed,
+        todayChange: yesterdayProcessed > 0 ? Math.round((todayProcessed - yesterdayProcessed) / yesterdayProcessed * 100) : null,
+        thisWeekProcessed, lastWeekProcessed,
+        weekChange: lastWeekProcessed > 0 ? Math.round((thisWeekProcessed - lastWeekProcessed) / lastWeekProcessed * 100) : null,
+      },
+    };
+  }),
+
+  // 发货时效监控（甲方要求：接单后24h必须发货，最迟48h）
+  shippingTimeliness: protectedProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return null;
+
+    const shippedStatuses = "'shipped','dispatched','in_transit','delivered','signed','settled'";
+    const unshippedStatuses = "'pending_assign','pending_dispatch','pending_price','priced','pending_vehicle','pending_approval','pending_inquiry','inquiry_confirmed'";
+
+    // 1. 已发货时效分布（最近30天）
+    let within24h = 0, between24and48h = 0, over48h = 0;
+    try {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+      const [result] = await db.execute(sql.raw(`
+        SELECT 
+          SUM(CASE WHEN TIMESTAMPDIFF(HOUR, createdAt, COALESCE(dispatchDate, updatedAt)) <= 24 THEN 1 ELSE 0 END) as within24h,
+          SUM(CASE WHEN TIMESTAMPDIFF(HOUR, createdAt, COALESCE(dispatchDate, updatedAt)) > 24 AND TIMESTAMPDIFF(HOUR, createdAt, COALESCE(dispatchDate, updatedAt)) <= 48 THEN 1 ELSE 0 END) as between24and48h,
+          SUM(CASE WHEN TIMESTAMPDIFF(HOUR, createdAt, COALESCE(dispatchDate, updatedAt)) > 48 THEN 1 ELSE 0 END) as over48h
+        FROM orders WHERE status IN (${shippedStatuses}) AND createdAt >= '${thirtyDaysAgo}'
+      `)) as any;
+      if (result && result[0]) {
+        within24h = Number(result[0].within24h) || 0;
+        between24and48h = Number(result[0].between24and48h) || 0;
+        over48h = Number(result[0].over48h) || 0;
+      }
+    } catch (e) { console.error("Timeliness distribution error:", e); }
+
+    // 2. 当前未发货订单时效状态 + 即将超时预警
+    let urgentOrders: Array<{
+      id: number; orderNumber: string; systemCode: string;
+      customerName: string | null; originCity: string | null; destinationCity: string | null;
+      mergedPlanNumber: string | null; parentId: number | null;
+      status: string; waitHours: number; remainHours: number; isUrgent: boolean; createdAt: string;
+    }> = [];
+    let unshippedWithin24h = 0, unshippedBetween24and48h = 0, unshippedOver48h = 0;
+    try {
+      const [unshippedResult] = await db.execute(sql.raw(`
+        SELECT id, orderNumber, systemCode, customerName, originCity, destinationCity, mergedPlanNumber, parentId, status,
+          isUrgent, createdAt, TIMESTAMPDIFF(HOUR, createdAt, NOW()) as waitHours,
+          48 - TIMESTAMPDIFF(HOUR, createdAt, NOW()) as remainHours
+        FROM orders WHERE status IN (${unshippedStatuses}) AND status != 'cancelled'
+        ORDER BY createdAt ASC
+      `)) as any;
+      if (unshippedResult) {
+        for (const row of unshippedResult) {
+          const waitH = Number(row.waitHours) || 0;
+          const remainH = Number(row.remainHours) || 0;
+          if (waitH <= 24) unshippedWithin24h++;
+          else if (waitH <= 48) unshippedBetween24and48h++;
+          else unshippedOver48h++;
+          if (remainH < 12) {
+            urgentOrders.push({
+              id: row.id, orderNumber: row.orderNumber, systemCode: row.systemCode,
+              customerName: row.customerName, originCity: row.originCity, destinationCity: row.destinationCity,
+              mergedPlanNumber: row.mergedPlanNumber ? String(row.mergedPlanNumber) : null,
+              parentId: row.parentId === null || row.parentId === undefined ? null : Number(row.parentId),
+              status: row.status, waitHours: waitH, remainHours: remainH,
+              isUrgent: Boolean(row.isUrgent), createdAt: String(row.createdAt),
+            });
+          }
+        }
+      }
+    } catch (e) { console.error("Unshipped orders error:", e); }
+
+    const totalShipped = within24h + between24and48h + over48h;
+    return {
+      shipped: { within24h, between24and48h, over48h, total: totalShipped },
+      unshipped: { within24h: unshippedWithin24h, between24and48h: unshippedBetween24and48h, over48h: unshippedOver48h, total: unshippedWithin24h + unshippedBetween24and48h + unshippedOver48h },
+      urgentOrders: urgentOrders.slice(0, 20),
+      onTimeRate24h: totalShipped > 0 ? Math.round(within24h / totalShipped * 100) : 0,
+      onTimeRate48h: totalShipped > 0 ? Math.round((within24h + between24and48h) / totalShipped * 100) : 0,
+    };
+  }),
+
+  // ============================================================
+  // 调度员绩效排名
+  // ============================================================
+  // 调度员工作量看板（支持年月筛选）
+  dispatcherWorkload: protectedProcedure.input(
+    z.object({
+      year: z.number().optional(),
+      month: z.number().min(1).max(12).optional(),
+    }).optional(),
+  ).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return { dispatchers: [] };
+
+    const now = new Date();
+    const year = input?.year ?? now.getFullYear();
+    const month = input?.month ?? (now.getMonth() + 1);
+
+    // 月份时间范围
+    const monthStart = new Date(year, month - 1, 1);
+    const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
+
+    try {
+      // 1. 获取所有调度员
+      const dispatcherRows = await db.select({
+        id: users.id,
+        name: users.name,
+        role: users.role,
+      }).from(users).where(
+        and(
+          or(
+            eq(users.role, "ltl_dispatcher"),
+            eq(users.role, "outsource_dispatcher"),
+            eq(users.role, "fleet_dispatcher"),
+          ),
+          eq(users.isActive, true),
+        )
+      );
+
+      if (dispatcherRows.length === 0) return { dispatchers: [] };
+
+      const dIds = dispatcherRows.map(d => d.id);
+
+      // 2. 当前积压（未完成的订单，不受月份筛选影响）
+      const pendingStatuses = ["pending_price", "pending_approval", "pending_vehicle", "pending_dispatch", "pending_inquiry", "inquiry_confirmed"] as const;
+      const backlogRows = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        backlogCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dIds),
+          isNotNull(orders.assignedDispatcherId),
+          inArray(orders.status, pendingStatuses),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 3. 本月完成量（状态为dispatched及之后，且在选定月份内有更新）
+      const completedStatuses = ["dispatched", "in_transit", "delivered", "signed", "settled"] as const;
+      const completedRows = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        completedCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dIds),
+          isNotNull(orders.assignedDispatcherId),
+          inArray(orders.status, completedStatuses),
+          gte(orders.updatedAt, monthStart),
+          lte(orders.updatedAt, monthEnd),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 4. 本月新接单量
+      const newOrderRows = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        newCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dIds),
+          isNotNull(orders.assignedDispatcherId),
+          gte(orders.autoAssignedAt, monthStart),
+          lte(orders.autoAssignedAt, monthEnd),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 5. 本月运输中（当前在运输中的订单数）
+      const inTransitRows = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        transitCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dIds),
+          isNotNull(orders.assignedDispatcherId),
+          inArray(orders.status, ["dispatched", "in_transit", "shipped"]),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      const backlogMap = new Map(backlogRows.map(r => [r.dispatcherId, Number(r.backlogCount)]));
+      const completedMap = new Map(completedRows.map(r => [r.dispatcherId, Number(r.completedCount)]));
+      const newOrderMap = new Map(newOrderRows.map(r => [r.dispatcherId, Number(r.newCount)]));
+      const inTransitMap = new Map(inTransitRows.map(r => [r.dispatcherId, Number(r.transitCount)]));
+
+      const dispatchers = dispatcherRows.map(d => {
+        const roleLabel = d.role === "ltl_dispatcher" ? "零担" :
+          d.role === "outsource_dispatcher" ? "外请" :
+          d.role === "fleet_dispatcher" ? "车队" : "调度";
+        return {
+          id: d.id,
+          name: d.name || `调度员${d.id}`,
+          role: d.role,
+          roleLabel,
+          backlog: backlogMap.get(d.id) || 0,
+          monthCompleted: completedMap.get(d.id) || 0,
+          monthNewOrders: newOrderMap.get(d.id) || 0,
+          inTransit: inTransitMap.get(d.id) || 0,
+        };
+      });
+
+      // 按积压数降序排列
+      dispatchers.sort((a, b) => b.backlog - a.backlog || b.monthCompleted - a.monthCompleted);
+
+      return { dispatchers };
+    } catch (e) {
+      console.error("Dispatcher workload error:", e);
+      return { dispatchers: [] };
+    }
+  }),
+
+  dispatcherPerformance: protectedProcedure.input(
+    z.object({
+      period: z.enum(["today", "week", "month"]).default("today"),
+    }).optional(),
+  ).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return { rankings: [], summary: { totalDispatchers: 0, totalProcessed: 0, avgResponseHours: 0 } };
+
+    const period = input?.period ?? "today";
+    const now = new Date();
+    let periodStart: Date;
+
+    if (period === "today") {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } else if (period === "week") {
+      const dayOfWeek = now.getDay();
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset);
+    } else {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+
+    try {
+      // 1. 获取所有调度员角色的用户
+      const dispatchers = await db.select({
+        id: users.id,
+        name: users.name,
+        role: users.role,
+        isActive: users.isActive,
+      }).from(users).where(
+        and(
+          or(
+            eq(users.role, "ltl_dispatcher"),
+            eq(users.role, "outsource_dispatcher"),
+            eq(users.role, "fleet_dispatcher"),
+          ),
+          eq(users.isActive, true),
+        )
+      );
+
+      if (dispatchers.length === 0) {
+        return { rankings: [], summary: { totalDispatchers: 0, totalProcessed: 0, avgResponseHours: 0 } };
+      }
+
+      const dispatcherIds = dispatchers.map(d => d.id);
+      const dispatcherMap = new Map(dispatchers.map(d => [d.id, d]));
+
+      // 2. 统计每个调度员在该时间段内处理的订单数
+      //    处理 = 该调度员被分配的订单中，在该时间段内有状态变更的
+      const processedCounts = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        processedCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dispatcherIds),
+          isNotNull(orders.assignedDispatcherId),
+          gte(orders.updatedAt, periodStart),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 3. 统计每个调度员的已完成订单数（状态为dispatched及之后的）
+      const completedStatuses = ["dispatched", "in_transit", "delivered", "signed", "settled"] as const;
+      const completedCounts = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        completedCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dispatcherIds),
+          isNotNull(orders.assignedDispatcherId),
+          inArray(orders.status, completedStatuses),
+          gte(orders.updatedAt, periodStart),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 4. 统计每个调度员的平均响应时间
+      //    响应时间 = 从autoAssignedAt（分配时间）到dispatchDate（派车时间）的差值
+      const responseTimeRows = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        avgResponseMs: sql<number>`AVG(TIMESTAMPDIFF(SECOND, ${orders.autoAssignedAt}, ${orders.dispatchDate}))`,
+        minResponseMs: sql<number>`MIN(TIMESTAMPDIFF(SECOND, ${orders.autoAssignedAt}, ${orders.dispatchDate}))`,
+        maxResponseMs: sql<number>`MAX(TIMESTAMPDIFF(SECOND, ${orders.autoAssignedAt}, ${orders.dispatchDate}))`,
+        responseCount: sql<number>`COUNT(${orders.dispatchDate})`,
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dispatcherIds),
+          isNotNull(orders.assignedDispatcherId),
+          isNotNull(orders.autoAssignedAt),
+          isNotNull(orders.dispatchDate),
+          gte(orders.dispatchDate, periodStart),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 5. 统计当前积压（分配给该调度员但尚未派车的订单）
+      const pendingStatuses = ["pending_price", "pending_approval", "pending_vehicle", "pending_dispatch"] as const;
+      const backlogCounts = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        backlogCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dispatcherIds),
+          isNotNull(orders.assignedDispatcherId),
+          inArray(orders.status, pendingStatuses),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 6. 统计今日新分配的订单数
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const todayAssigned = await db.select({
+        dispatcherId: orders.assignedDispatcherId,
+        todayCount: count(),
+      }).from(orders).where(
+        and(
+          inArray(orders.assignedDispatcherId, dispatcherIds),
+          isNotNull(orders.assignedDispatcherId),
+          gte(orders.autoAssignedAt, todayStart),
+        )
+      ).groupBy(orders.assignedDispatcherId);
+
+      // 构建排名数据
+      const processedMap = new Map(processedCounts.map(r => [r.dispatcherId, Number(r.processedCount)]));
+      const completedMap = new Map(completedCounts.map(r => [r.dispatcherId, Number(r.completedCount)]));
+      const responseMap = new Map(responseTimeRows.map(r => [r.dispatcherId, {
+        avgSeconds: Number(r.avgResponseMs) || 0,
+        minSeconds: Number(r.minResponseMs) || 0,
+        maxSeconds: Number(r.maxResponseMs) || 0,
+        count: Number(r.responseCount) || 0,
+      }]));
+      const backlogMap = new Map(backlogCounts.map(r => [r.dispatcherId, Number(r.backlogCount)]));
+      const todayMap = new Map(todayAssigned.map(r => [r.dispatcherId, Number(r.todayCount)]));
+
+      const rankings = dispatchers.map(d => {
+        const processed = processedMap.get(d.id) || 0;
+        const completed = completedMap.get(d.id) || 0;
+        const response = responseMap.get(d.id);
+        const backlog = backlogMap.get(d.id) || 0;
+        const todayNew = todayMap.get(d.id) || 0;
+        const avgResponseHours = response ? Math.round(response.avgSeconds / 3600 * 10) / 10 : null;
+        const completionRate = processed > 0 ? Math.round(completed / processed * 100) : 0;
+
+        // 综合评分：处理量权重40% + 响应速度权重30% + 完成率权重30%
+        // 响应速度分数：<2h=100, 2-6h=80, 6-12h=60, 12-24h=40, >24h=20
+        let speedScore = 50; // 默认分数（无数据时）
+        if (avgResponseHours !== null) {
+          if (avgResponseHours < 2) speedScore = 100;
+          else if (avgResponseHours < 6) speedScore = 80;
+          else if (avgResponseHours < 12) speedScore = 60;
+          else if (avgResponseHours < 24) speedScore = 40;
+          else speedScore = 20;
+        }
+
+        const roleLabel = d.role === "ltl_dispatcher" ? "零担" :
+          d.role === "outsource_dispatcher" ? "外请" :
+          d.role === "fleet_dispatcher" ? "车队" : "调度";
+
+        return {
+          id: d.id,
+          name: d.name || `调度员${d.id}`,
+          role: d.role,
+          roleLabel,
+          processed,
+          completed,
+          completionRate,
+          avgResponseHours,
+          minResponseHours: response ? Math.round(response.minSeconds / 3600 * 10) / 10 : null,
+          maxResponseHours: response ? Math.round(response.maxSeconds / 3600 * 10) / 10 : null,
+          backlog,
+          todayNew,
+          speedScore,
+          // 综合评分
+          totalScore: Math.round(processed * 0.4 + speedScore * 0.3 + completionRate * 0.3),
+        };
+      });
+
+      // 按综合评分降序排名
+      rankings.sort((a, b) => b.totalScore - a.totalScore || b.processed - a.processed);
+
+      // 汇总
+      const totalProcessed = rankings.reduce((sum, r) => sum + r.processed, 0);
+      const avgResponseAll = rankings.filter(r => r.avgResponseHours !== null);
+      const avgResponseHours = avgResponseAll.length > 0
+        ? Math.round(avgResponseAll.reduce((sum, r) => sum + (r.avgResponseHours || 0), 0) / avgResponseAll.length * 10) / 10
+        : 0;
+
+      return {
+        rankings,
+        summary: {
+          totalDispatchers: dispatchers.length,
+          totalProcessed,
+          avgResponseHours,
+        },
+      };
+    } catch (e) {
+      console.error("Dispatcher performance error:", e);
+      return { rankings: [], summary: { totalDispatchers: 0, totalProcessed: 0, avgResponseHours: 0 } };
+    }
+  }),
+});

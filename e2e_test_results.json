@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-02-27T18:34:29.105Z",
+  "summary": {
+    "passed": 2,
+    "failed": 17,
+    "total": 19,
+    "passRate": "10.5%"
+  },
+  "errors": [
+    {
+      "name": "录单员登录",
+      "detail": "Login failed for ludan: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "客服经理登录",
+      "detail": "Login failed for kefu: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "外请调度员登录",
+      "detail": "Login failed for waiqing: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "车队调度员登录",
+      "detail": "Login failed for chedui: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "零担调度员登录",
+      "detail": "Login failed for lingdan: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "财务助理登录",
+      "detail": "Login failed for caiwu: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "A1-录单员创建外请订单",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "B1-录单员创建零担订单",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "C1-录单员创建自运订单",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "数据隔离-外请调度员李四",
+      "detail": "Login failed for dispatcher_li: {\"error\":{\"json\":{\"message\":\"用户名或密码错误\",\"code\":-32001,\"data\":{\"code\":\"UNAUTHORIZED\",\"httpStatus\":401,\"stack\":\"TRPCError: 用户名或密码错误\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/server/routers/auth.ts:48:15)\\n    at async resolveMiddleware (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:571:22)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async callRecursive (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:633:20)\\n    at async procedure (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/procedureBuilder.ts:673:20)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:347:31)\\n    at async resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:375:31)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"auth.login\"}}}}"
+    },
+    {
+      "name": "退回功能-单条退回",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "退回功能-批量退回",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "异常-特殊字符处理",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "异常-大金额处理",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "异常-非法状态跳转测试",
+      "detail": "Cannot read properties of undefined (reading 'token')"
+    },
+    {
+      "name": "管理驾驶舱-统计数据加载",
+      "detail": "总订单:undefined, 进行中:undefined, 已完成:undefined"
+    },
+    {
+      "name": "运价数据库查询",
+      "detail": "Query freightRate.list failed: {\"json\":{\"message\":\"No procedure found on path \\\"freightRate.list\\\"\",\"code\":-32004,\"data\":{\"code\":\"NOT_FOUND\",\"httpStatus\":404,\"stack\":\"TRPCError: No procedure found on path \\\"freightRate.list\\\"\\n    at <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:325:17)\\n    at Array.map (<anonymous>)\\n    at resolveResponse (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/unstable-core-do-not-import/http/resolveResponse.ts:317:33)\\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)\\n    at async <anonymous> (/home/ubuntu/yongan_dispatch_system/node_modules/.pnpm/@trpc+server@11.6.0_typescript@5.9.3/node_modules/@trpc/server/src/adapters/node-http/nodeHTTPRequestHandler.ts:100:26)\",\"path\":\"freightRate.list\"}}}"
+    }
+  ]
+}
