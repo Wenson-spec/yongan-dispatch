@@ -1705,7 +1705,7 @@ export default function LtlUnifiedWorkspace() {
                     emptyText="当前使用系统默认排序（最近询价更新时间倒序）"
                   />
                 </div>
-                {/* 卡片列表：按目的站分组 */}
+                {/* 表格列表：按目的站分组 */}
                 {confirmedLoading ? (
                   <div className="text-center py-12 text-muted-foreground text-sm">加载中...</div>
                 ) : paginatedConfirmed.length === 0 ? (
@@ -1726,158 +1726,171 @@ export default function LtlUnifiedWorkspace() {
                     }))
                     .sort((a, b) => b.totalWeight - a.totalWeight);
                   const totalGroupPackages = (orders: any[]) => orders.reduce((s, o) => s + (Number(o.packageCount) || 0), 0);
+                  const CONFIRMED_COL_COUNT = 7;
                   return (
-                    <div className="space-y-3 px-4 py-4">
-                      {groups.map(group => {
-                        const groupAllSelected = group.orders.length > 0 && group.orders.every((o: any) => selectedIds.has(o.id));
-                        const groupSomeSelected = group.orders.some((o: any) => selectedIds.has(o.id));
-                        const groupTotalPackages = totalGroupPackages(group.orders);
-                        return (
-                        <div key={group.key} className="rounded-lg border bg-card overflow-hidden">
-                          {/* 分组头 */}
-                          <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 border-b">
-                            <Checkbox
-                              checked={groupAllSelected}
-                              data-state={groupAllSelected ? "checked" : groupSomeSelected ? "indeterminate" : "unchecked"}
-                              onCheckedChange={() => {
-                                const next = new Set(selectedIds);
-                                if (groupAllSelected) {
-                                  group.orders.forEach((o: any) => next.delete(o.id));
-                                } else {
-                                  group.orders.forEach((o: any) => next.add(o.id));
-                                }
-                                setSelectedIds(next);
-                              }}
-                            />
-                            <span className="font-semibold text-base text-slate-800">📍 {group.key}</span>
-                            <Badge variant="secondary" className="text-xs">{group.orders.length}单</Badge>
-                            {group.totalWeight > 0 && (
-                              <Badge variant="outline" className="text-xs text-orange-700 border-orange-400 bg-orange-100 font-semibold">
-                                总{group.totalWeight.toFixed(2)}吨
-                              </Badge>
-                            )}
-                            {groupTotalPackages > 0 && (
-                              <Badge variant="outline" className="text-xs text-purple-700 border-purple-300 bg-purple-50">
-                                共{groupTotalPackages}架
-                              </Badge>
-                            )}
-                            {group.totalAmount > 0 && (
-                              <Badge variant="outline" className="text-xs text-green-700 border-green-300 bg-green-50">
-                                运费￥{group.totalAmount.toFixed(0)}
-                              </Badge>
-                            )}
-                          </div>
-                          {/* 订单卡片 */}
-                          <div className="divide-y">
-                            {group.orders.map((order: any) => {
-                              const selected = selectedIds.has(order.id);
+                    <div className="px-4 py-4">
+                      <div className="rounded-lg border bg-card overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-8"></TableHead>
+                              <TableHead>客户订单号</TableHead>
+                              <TableHead>客户·货物</TableHead>
+                              <TableHead>路线·货站</TableHead>
+                              <TableHead>重量架数</TableHead>
+                              <TableHead>运费明细</TableHead>
+                              <TableHead className="text-right">操作</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {groups.map(group => {
+                              const groupAllSelected = group.orders.length > 0 && group.orders.every((o: any) => selectedIds.has(o.id));
+                              const groupSomeSelected = group.orders.some((o: any) => selectedIds.has(o.id));
+                              const groupTotalPackages = totalGroupPackages(group.orders);
                               return (
-                              <div
-                                key={order.id}
-                                className={`px-4 py-3 hover:bg-slate-50/70 transition cursor-pointer ${selected ? "bg-primary/5 ring-1 ring-primary/30" : order.isUrgent ? "bg-red-50/60 border-l-4 border-l-red-500" : ""}`}
-                                onClick={() => toggleSelect(order.id)}
-                              >
-                                <div className="grid grid-cols-12 gap-3 items-start">
-                                  {/* 勾选框 */}
-                                  <div className="col-span-12 sm:col-span-12 md:col-auto flex items-center md:block">
-                                    <Checkbox
-                                      checked={selected}
-                                      onCheckedChange={() => toggleSelect(order.id)}
-                                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                                    />
-                                  </div>
-                                  {/* 订单号+客户 */}
-                                  <div className="col-span-3 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                      {order.isUrgent && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" title="加急"></span>}
-                                      <span className="font-mono text-xs font-semibold truncate">{order.orderNumber || order.systemCode}</span>
-                                      {order.isUrgent && <Badge variant="destructive" className="text-[9px] h-4 px-1 leading-none">急</Badge>}
-                                    </div>
-                                    <div className="text-sm font-medium mt-0.5 truncate">{order.customerName || "-"}</div>
-                                    <div className="text-xs text-muted-foreground truncate">{order.cargoName || "-"}</div>
-                                    <LtlModeBadges order={order} pickupSubchain={getPickupSubchainRecord(order)} deliverySubchain={getDeliverySubchainRecord(order)} />
-                                  </div>
-                                  {/* 路线+货站 */}
-                                  <div className="col-span-3 min-w-0 text-xs">
-                                    <div className="flex items-center gap-1 text-slate-700">
-                                      <span className="text-muted-foreground">路线：</span>
-                                      {order.originCity || "?"} <ArrowRight className="h-3 w-3 inline" /> {order.destinationCity || "?"}
-                                    </div>
-                                    <div className="text-slate-700 mt-0.5">
-                                      <span className="text-muted-foreground">货站：</span>{order.freightStationName || "-"}
-                                    </div>
-                                    <div className="text-slate-700 mt-0.5">
-                                      <span className="text-muted-foreground">运单号：</span>
-                                      {order.freightWaybillNumber ? (
-                                        <span className="inline-flex items-center gap-1">
-                                          <span className="font-mono text-blue-600">{order.freightWaybillNumber}</span>
-                                          <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={(e: React.MouseEvent) => { e.stopPropagation(); setEditWaybillOrder(order); setEditWaybillNumber(order.freightWaybillNumber || ""); setShowEditWaybillDialog(true); }}>
-                                            <Pencil className="h-3 w-3 text-muted-foreground" />
-                                          </Button>
-                                        </span>
-                                      ) : <span className="text-muted-foreground">-</span>}
-                                    </div>
-                                  </div>
-                                  {/* 重量 */}
-                                  <div className="col-span-2 min-w-0 text-xs">
-                                    <div><span className="text-muted-foreground">重量：</span><span className="font-medium">{order.weight || "-"}吨</span></div>
-                                    {order.packageCount && (
-                                      <div className="mt-0.5"><span className="text-muted-foreground">架数：</span>{order.packageCount}</div>
-                                    )}
-                                  </div>
-                                  {/* 运费 */}
-                                  <div className="col-span-2 min-w-0 text-xs">
-                                    {order.dispatchPrice ? (
-                                      <>
-                                        <div className="font-semibold text-orange-600 text-sm">¥{Number(order.dispatchPrice).toFixed(0)}</div>
-                                        {order.ltlUnitPrice && (
-                                          <div className="text-[10px] text-muted-foreground">
-                                            {order.ltlUnitPrice}元/吨×{order.weight || 0}吨
-                                            {order.ltlDeliveryFee && parseFloat(String(order.ltlDeliveryFee)) > 0 ? `+送${order.ltlDeliveryFee}` : ""}
-                                            {order.ltlOtherFee && parseFloat(String(order.ltlOtherFee)) > 0 ? `+其他${order.ltlOtherFee}` : ""}
-                                          </div>
+                                <React.Fragment key={group.key}>
+                                  {/* 分组标题行 */}
+                                  <TableRow className="bg-slate-50 hover:bg-slate-50">
+                                    <TableCell colSpan={CONFIRMED_COL_COUNT} className="py-2">
+                                      <div className="flex items-center gap-3 flex-wrap">
+                                        <Checkbox
+                                          checked={groupAllSelected}
+                                          data-state={groupAllSelected ? "checked" : groupSomeSelected ? "indeterminate" : "unchecked"}
+                                          onCheckedChange={() => {
+                                            const next = new Set(selectedIds);
+                                            if (groupAllSelected) {
+                                              group.orders.forEach((o: any) => next.delete(o.id));
+                                            } else {
+                                              group.orders.forEach((o: any) => next.add(o.id));
+                                            }
+                                            setSelectedIds(next);
+                                          }}
+                                        />
+                                        <span className="font-semibold text-base text-slate-800">📍 {group.key}</span>
+                                        <Badge variant="secondary" className="text-xs">{group.orders.length}单</Badge>
+                                        {group.totalWeight > 0 && (
+                                          <Badge variant="outline" className="text-xs text-orange-700 border-orange-400 bg-orange-100 font-semibold">
+                                            总{group.totalWeight.toFixed(2)}吨
+                                          </Badge>
                                         )}
-                                      </>
-                                    ) : <span className="text-muted-foreground">-</span>}
-                                    {order.dispatcherRemark && (
-                                      <div className="text-xs text-muted-foreground mt-1 truncate" title={order.dispatcherRemark}>备注：{order.dispatcherRemark}</div>
-                                    )}
-                                  </div>
-                                  {/* 操作 */}
-                                  <div className="col-span-2 min-w-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-                                    <div className="flex flex-wrap gap-1 justify-end">
-                                      <UrgentToggleButton order={order} />
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-green-600 hover:bg-green-50" onClick={() => startEdit(order)}>
-                                            <Edit2 className="h-3.5 w-3.5" />
-                                          </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent>编辑信息</TooltipContent>
-                                      </Tooltip>
-                                      <DropdownMenu>
-                                        <DropdownMenuTrigger asChild>
-                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-                                            <MoreHorizontal className="h-3.5 w-3.5" />
-                                          </Button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-                                          <DropdownMenuItem onClick={() => handleToggleCustomerSelfDeliver(order, !hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG))}>
-                                            <Package className="mr-2 h-4 w-4" />
-                                            {hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG) ? "取消客户自送到站确认" : "客户自送到站确认"}
-                                          </DropdownMenuItem>
-                                        </DropdownMenuContent>
-                                      </DropdownMenu>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
+                                        {groupTotalPackages > 0 && (
+                                          <Badge variant="outline" className="text-xs text-purple-700 border-purple-300 bg-purple-50">
+                                            共{groupTotalPackages}架
+                                          </Badge>
+                                        )}
+                                        {group.totalAmount > 0 && (
+                                          <Badge variant="outline" className="text-xs text-green-700 border-green-300 bg-green-50">
+                                            运费／{group.totalAmount.toFixed(0)}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                  {/* 订单行 */}
+                                  {group.orders.map((order: any) => {
+                                    const selected = selectedIds.has(order.id);
+                                    return (
+                                      <TableRow
+                                        key={order.id}
+                                        className={`cursor-pointer ${selected ? "bg-primary/5" : order.isUrgent ? "bg-red-50/60" : ""}`}
+                                        onClick={() => toggleSelect(order.id)}
+                                      >
+                                        <TableCell className="w-8" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                          <Checkbox
+                                            checked={selected}
+                                            onCheckedChange={() => toggleSelect(order.id)}
+                                          />
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="flex items-center gap-1.5">
+                                            {order.isUrgent && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" title="加急"></span>}
+                                            <span className="font-mono text-xs font-semibold">{order.orderNumber || order.systemCode}</span>
+                                            {order.isUrgent && <Badge variant="destructive" className="text-[9px] h-4 px-1 leading-none">急</Badge>}
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="text-sm font-medium truncate">{order.customerName || "-"}</div>
+                                          <div className="text-xs text-muted-foreground truncate">{order.cargoName || "-"}</div>
+                                          <LtlModeBadges order={order} pickupSubchain={getPickupSubchainRecord(order)} deliverySubchain={getDeliverySubchainRecord(order)} />
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          <div className="flex items-center gap-1 text-slate-700">
+                                            <span className="text-muted-foreground">路线：</span>
+                                            {order.originCity || "?"} <ArrowRight className="h-3 w-3 inline" /> {order.destinationCity || "?"}
+                                          </div>
+                                          <div className="text-slate-700 mt-0.5">
+                                            <span className="text-muted-foreground">货站：</span>{order.freightStationName || "-"}
+                                          </div>
+                                          <div className="text-slate-700 mt-0.5">
+                                            <span className="text-muted-foreground">运单号：</span>
+                                            {order.freightWaybillNumber ? (
+                                              <span className="inline-flex items-center gap-1">
+                                                <span className="font-mono text-blue-600">{order.freightWaybillNumber}</span>
+                                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={(e: React.MouseEvent) => { e.stopPropagation(); setEditWaybillOrder(order); setEditWaybillNumber(order.freightWaybillNumber || ""); setShowEditWaybillDialog(true); }}>
+                                                  <Pencil className="h-3 w-3 text-muted-foreground" />
+                                                </Button>
+                                              </span>
+                                            ) : <span className="text-muted-foreground">-</span>}
+                                          </div>
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          <div><span className="text-muted-foreground">重量：</span><span className="font-medium">{order.weight || "-"}吨</span></div>
+                                          {order.packageCount && (
+                                            <div className="mt-0.5"><span className="text-muted-foreground">架数：</span>{order.packageCount}</div>
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          {order.dispatchPrice ? (
+                                            <>
+                                              <div className="font-semibold text-orange-600 text-sm">￥{Number(order.dispatchPrice).toFixed(0)}</div>
+                                              {order.ltlUnitPrice && (
+                                                <div className="text-[10px] text-muted-foreground">
+                                                  {order.ltlUnitPrice}元/吨×{order.weight || 0}吨
+                                                  {order.ltlDeliveryFee && parseFloat(String(order.ltlDeliveryFee)) > 0 ? `+送${order.ltlDeliveryFee}` : ""}
+                                                  {order.ltlOtherFee && parseFloat(String(order.ltlOtherFee)) > 0 ? `+其他${order.ltlOtherFee}` : ""}
+                                                </div>
+                                              )}
+                                            </>
+                                          ) : <span className="text-muted-foreground">-</span>}
+                                          {order.dispatcherRemark && (
+                                            <div className="text-xs text-muted-foreground mt-1 truncate" title={order.dispatcherRemark}>备注：{order.dispatcherRemark}</div>
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-right" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                          <div className="flex flex-wrap gap-1 justify-end">
+                                            <UrgentToggleButton order={order} />
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-green-600 hover:bg-green-50" onClick={() => startEdit(order)}>
+                                                  <Edit2 className="h-3.5 w-3.5" />
+                                                </Button>
+                                              </TooltipTrigger>
+                                              <TooltipContent>编辑信息</TooltipContent>
+                                            </Tooltip>
+                                            <DropdownMenu>
+                                              <DropdownMenuTrigger asChild>
+                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                                </Button>
+                                              </DropdownMenuTrigger>
+                                              <DropdownMenuContent align="end" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                                <DropdownMenuItem onClick={() => handleToggleCustomerSelfDeliver(order, !hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG))}>
+                                                  <Package className="mr-2 h-4 w-4" />
+                                                  {hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG) ? "取消客户自送到站确认" : "客户自送到站确认"}
+                                                </DropdownMenuItem>
+                                              </DropdownMenuContent>
+                                            </DropdownMenu>
+                                          </div>
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </React.Fragment>
                               );
                             })}
-                          </div>
-                        </div>
-                        );
-                      })}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   );
                 })()}
