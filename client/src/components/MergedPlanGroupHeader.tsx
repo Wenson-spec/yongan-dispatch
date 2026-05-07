@@ -4,25 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AlertTriangle, ChevronDown, ChevronRight, Layers, Truck } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const STATUS_LABELS: Record<string, string> = {
-  pending_assign: "待指派",
-  pending_price: "待定价",
-  pending_dispatch: "待调度",
-  pending_vehicle: "待找车",
-  pending_approval: "待审批",
-  pending_inquiry: "待询价",
-  inquiry_confirmed: "已询价",
-  shipped: "已发运",
-  priced: "已定价",
-  dispatched: "已调度",
-  in_transit: "运输中",
-  delivered: "已送达",
-  signed: "已签收",
-  settled: "已结算",
-  on_hold: "等通知",
-  cancelled: "已取消",
-};
+import { STATUS_LABELS } from "@/lib/orderStatus";
 
 const STAGE_BADGE_TONE: Record<string, string> = {
   pending_assign: "border-yellow-200 bg-yellow-50 text-yellow-800",

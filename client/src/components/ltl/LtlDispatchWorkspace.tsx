@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { STATUS_LABELS, STATUS_COLORS } from "@/lib/orderStatus";
 import { fmtDate } from "@/lib/dateUtils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -359,26 +360,6 @@ export default function LtlDispatchWorkspace() {
     const fileName = `派车单_${batch.plateNumber}_${batch.driverName}_${new Date(batch.dispatchDate).toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(wb, fileName);
     toast.success(`已导出：${fileName}`);
-  };
-
-  const STATUS_LABELS: Record<string, string> = {
-    inquiry_confirmed: "已询价",
-    dispatched: "已发运",
-    shipped: "已发运",
-    in_transit: "运输中",
-    delivered: "已送达",
-    signed: "已签收",
-    settled: "已结算",
-  };
-
-  const STATUS_COLORS: Record<string, string> = {
-    inquiry_confirmed: "bg-teal-100 text-teal-700",
-    dispatched: "bg-blue-100 text-blue-700",
-    shipped: "bg-blue-100 text-blue-700",
-    in_transit: "bg-green-100 text-green-700",
-    delivered: "bg-emerald-100 text-emerald-700",
-    signed: "bg-green-200 text-green-800",
-    settled: "bg-green-200 text-green-800",
   };
 
   return (
