@@ -1676,7 +1676,7 @@ export default function LtlUnifiedWorkspace() {
           <TabsContent value="confirmed">
             <Card>
               <CardContent className="p-0">
-                <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 text-sm text-blue-700">
+                <div className="sticky top-0 z-10 shadow-sm bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 text-sm text-blue-700">
                   <Truck className="h-4 w-4" />
                   <span>询价完成后，请进入下一步的零担派车环节统一创建派车批次（支持批量派车）。</span>
                   <Button size="sm" variant="link" className="text-blue-700 underline p-0 h-auto" onClick={() => setActiveTab("ltl_dispatch")}>进入下一步：零担派车</Button>
@@ -1934,7 +1934,7 @@ export default function LtlUnifiedWorkspace() {
                   const canBatchSign = selectedActive.filter((o: any) => o.status === "delivered");
                   const canCombinedDelivery = selectedActive.filter((o: any) => ["shipped", "in_transit"].includes(o.status));
                   return (
-                    <div className="flex items-center gap-3 px-4 py-2.5 bg-blue-50 border-b">
+                    <div className="sticky top-0 z-10 shadow-sm flex items-center gap-3 px-4 py-2.5 bg-blue-50 border-b">
                       <span className="text-sm font-medium text-blue-700">已选 {selectedActive.length} 条</span>
                       <div className="flex items-center gap-2 flex-wrap">
                         {canCombinedDelivery.length > 1 && (

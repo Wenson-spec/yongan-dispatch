@@ -27,6 +27,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import { toast } from "sonner";
 import { TablePagination } from "@/components/TablePagination";
@@ -72,7 +73,8 @@ export default function LtlDispatchWorkspace() {
   // 智能拼货推荐
   const [showSmartConsolidate, setShowSmartConsolidate] = useState(false);
   const [smartVehicleLength, setSmartVehicleLength] = useState("");
-  const [smartVehicleModel, setSmartVehicleModel] = useState("");
+  // 运力柔性：车型改为多选（例如 13 米平板与 13 米高栏 金砖等货物可互换）
+  const [smartVehicleModels, setSmartVehicleModels] = useState<string[]>([]);
   const [smartCapacity, setSmartCapacity] = useState<string>("");
   const [smartTargetCity, setSmartTargetCity] = useState<string>("");
 
@@ -1080,19 +1082,24 @@ export default function LtlDispatchWorkspace() {
         onOpenChange={setShowSmartConsolidate}
         vehicleLength={smartVehicleLength}
         setVehicleLength={setSmartVehicleLength}
-        vehicleModel={smartVehicleModel}
-        setVehicleModel={setSmartVehicleModel}
+        vehicleModels={smartVehicleModels}
+        setVehicleModels={setSmartVehicleModels}
         capacity={smartCapacity}
         setCapacity={setSmartCapacity}
         targetCity={smartTargetCity}
         setTargetCity={setSmartTargetCity}
         availableOrders={availableOrders}
-        onApply={(orderIds, recommendedLength, recommendedModel, recommendedCapacity) => {
+        onApply={(orderIds, recommendedLength, recommendedModels, recommendedCapacity) => {
           // 1. 勾选推荐订单
           setSelectedOrderIds(new Set(orderIds));
-          // 2. 预填充车型表单
+          // 2. 预填充车型表单（后端持久化仅接受单一车型，多选时带出首个并提示）
           if (recommendedLength) setVehicleLength(recommendedLength);
-          if (recommendedModel) setVehicleModel(recommendedModel);
+          if (recommendedModels && recommendedModels.length > 0) {
+            setVehicleModel(recommendedModels[0]);
+            if (recommendedModels.length > 1) {
+              toast.info(`已预填车型：${recommendedModels[0]}（备选：${recommendedModels.slice(1).join("、")}）。可在右侧表单手动修改。`);
+            }
+          }
           if (recommendedCapacity) setCapacity(String(recommendedCapacity));
           // 3. 关闭拼货弹窗
           setShowSmartConsolidate(false);
@@ -1142,21 +1149,22 @@ interface SmartConsolidateDialogProps {
   onOpenChange: (open: boolean) => void;
   vehicleLength: string;
   setVehicleLength: (v: string) => void;
-  vehicleModel: string;
-  setVehicleModel: (v: string) => void;
+  /** 运力柔性：车型为多选，空数组表示不限 */
+  vehicleModels: string[];
+  setVehicleModels: (v: string[]) => void;
   capacity: string;
   setCapacity: (v: string) => void;
   targetCity: string;
   setTargetCity: (v: string) => void;
   availableOrders: any[];
-  onApply: (orderIds: number[], vehicleLength: string, vehicleModel: string, capacity: number) => void;
+  onApply: (orderIds: number[], vehicleLength: string, vehicleModels: string[], capacity: number) => void;
 }
 
 function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
   const {
     open, onOpenChange,
     vehicleLength, setVehicleLength,
-    vehicleModel, setVehicleModel,
+    vehicleModels, setVehicleModels,
     capacity, setCapacity,
     targetCity, setTargetCity,
     availableOrders, onApply,
@@ -1179,7 +1187,7 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
     {
       capacity: capacityNum,
       vehicleLength: vehicleLength || undefined,
-      vehicleModel: vehicleModel || undefined,
+      vehicleModels: vehicleModels.length > 0 ? vehicleModels : undefined,
       targetDestinationCity: targetCity || undefined,
       maxRecommendations: 5,
       fillRateMin: 0.3,
@@ -1226,18 +1234,20 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
               </Select>
             </div>
             <div>
-              <Label className="text-xs">车型</Label>
-              <Select value={vehicleModel} onValueChange={setVehicleModel}>
-                <SelectTrigger className="h-9 mt-1">
-                  <SelectValue placeholder="选择车型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="高栏">高栏</SelectItem>
-                  <SelectItem value="平板">平板</SelectItem>
-                  <SelectItem value="厢式">厢式</SelectItem>
-                  <SelectItem value="飞翼">飞翼</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-xs">车型（可多选，任一匹配即可）</Label>
+              <ToggleGroup
+                type="multiple"
+                value={vehicleModels}
+                onValueChange={(v: string[]) => setVehicleModels(v)}
+                variant="outline"
+                size="sm"
+                className="mt-1 flex-wrap justify-start"
+              >
+                <ToggleGroupItem value="高栏" aria-label="高栏">高栏</ToggleGroupItem>
+                <ToggleGroupItem value="平板" aria-label="平板">平板</ToggleGroupItem>
+                <ToggleGroupItem value="厢式" aria-label="厢式">厢式</ToggleGroupItem>
+                <ToggleGroupItem value="飞翼" aria-label="飞翼">飞翼</ToggleGroupItem>
+              </ToggleGroup>
             </div>
             <div>
               <Label className="text-xs">载重(吨)<span className="text-red-500">*</span></Label>
@@ -1319,7 +1329,7 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
                         className="bg-violet-600 hover:bg-violet-700"
                         onClick={() => {
                           const ids = rec.orders.map((o: any) => o.id);
-                          onApply(ids, vehicleLength, vehicleModel, capacityNum);
+                          onApply(ids, vehicleLength, vehicleModels, capacityNum);
                         }}
                       >
                         <Truck className="h-3.5 w-3.5 mr-1" />

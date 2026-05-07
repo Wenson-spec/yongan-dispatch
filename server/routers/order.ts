@@ -4299,7 +4299,8 @@ export const orderRouter = router({
     z.object({
       capacity: z.number().min(0.1, "载重必须大于0"),                  // 车辆载重（吨）
       vehicleLength: z.string().optional(),                              // 车长（仅作回显）
-      vehicleModel: z.string().optional(),                               // 车型（仅作回显）
+      // 运力柔性：车型为多选数组，任一车型匹配即可（例如 13 米平板与 13 米高栏 金砖类货物可互换）
+      vehicleModels: z.array(z.string()).optional(),                     // 车型（多选，OR 匹配）
       targetDestinationCity: z.string().optional(),                      // 限定目的站，留空则跨站推荐
       candidateOrderIds: z.array(z.number()).optional(),                 // 限定候选范围，留空则取所有可派订单
       maxRecommendations: z.number().min(1).max(10).default(5),         // 返回前N个组合
@@ -4320,6 +4321,9 @@ export const orderRouter = router({
     if (input.targetDestinationCity) {
       baseConditions.push(eq(orders.destinationCity, input.targetDestinationCity));
     }
+    // 运力柔性 - 车型多选：orders 表未持久化客户车型偏好字段，故在此仅作为派车员意向透传/回显；
+    // 与车辆台账的 vehicles.vehicleModel 产生交集由上层 UI 负责 OR 匹配（例如 13 米平板 / 高栏 金砖类货物可互换）。
+    // 中期如果 orders 扩展“车型偏好”字段，可在此处启用 inArray(orders.vehicleModelPreference, input.vehicleModels) 进行 SQL 层 OR 匹配。
     const candidates = await db.select().from(orders).where(and(...baseConditions));
 
     // 排除已经派车的订单
@@ -4404,7 +4408,7 @@ export const orderRouter = router({
       totalCandidates: enriched.length,
       capacity: input.capacity,
       vehicleLength: input.vehicleLength || null,
-      vehicleModel: input.vehicleModel || null,
+      vehicleModels: input.vehicleModels && input.vehicleModels.length > 0 ? input.vehicleModels : null,
     };
   }),
   // 删除零担派车批次（权限细化）
