@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/tabs";
 import {
   Truck, RefreshCw, Plus, Download, Search, Trash2, Eye, Package, Loader2, Filter, X, ChevronDown, ChevronRight, Sparkles,
+  ArrowRight, Upload, FileText,
 } from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -45,6 +46,11 @@ export default function LtlDispatchWorkspace() {
   const [activeTab, setActiveTab] = useState("create");
   const [search, setSearch] = useState("");
   const [batchSearch, setBatchSearch] = useState("");
+
+  // 处理方式（5 选 1，对齐外挂版零担工作台 UI）
+  // 仅作为视觉引导：用户先告诉系统“这一批主要走哪种业务流程”，便于在表单与 OCR 入口处给出针对性提示
+  type DispatchProcessMode = "station_delivery" | "customer_pickup" | "customer_self_deliver" | "delivery_outsource" | "pickup_outsource";
+  const [processMode, setProcessMode] = useState<DispatchProcessMode>("station_delivery");
 
   // 批量单号筛选
   const [showBatchFilter, setShowBatchFilter] = useState(false);
@@ -387,6 +393,67 @@ export default function LtlDispatchWorkspace() {
         {/* 创建派车 */}
         <TabsContent value="create">
           <div className="space-y-4">
+            {/* 处理方式选择（5 选 1，对齐外挂版零担工作台） */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">本批处理方式</CardTitle>
+                  <Badge variant="outline" className="text-xs font-normal">请选择本次处理方式</Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
+                  {([
+                    { v: "station_delivery",       label: "货站包送",         desc: "由货站负责派送到目的地，默认主链流程，有回单。",        icon: Truck,    color: "emerald" },
+                    { v: "customer_self_deliver", label: "客户自送到货站", desc: "客户自行送货到货站，操作员确认到站即可，生成回单。",  icon: Package,  color: "amber"   },
+                    { v: "pickup_outsource",     label: "外请车送到货站",   desc: "外请第三方车辆送到货站，需走外请审批流程，生成回单。", icon: ArrowRight, color: "sky" },
+                    { v: "customer_pickup",      label: "客户自提",         desc: "客户到货站自行提货，标记后该订单不生成回单。",        icon: Package,  color: "amber"   },
+                    { v: "delivery_outsource",   label: "我们外请送货",     desc: "由我们外请第三方车辆送货到目的地，走外请审批流程，有回单。", icon: ArrowRight, color: "sky" },
+                  ] as const).map(({ v, label, desc, icon: Icon, color }) => {
+                    const active = processMode === v;
+                    const palette: Record<string, string> = {
+                      emerald: active ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-300" : "border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40",
+                      amber:   active ? "border-amber-400 bg-amber-50 ring-1 ring-amber-300"      : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40",
+                      sky:     active ? "border-sky-400 bg-sky-50 ring-1 ring-sky-300"            : "border-slate-200 hover:border-sky-300 hover:bg-sky-50/40",
+                    };
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setProcessMode(v as DispatchProcessMode)}
+                        className={`text-left rounded-lg border p-3 transition-colors ${palette[color]}`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Icon className={`h-4 w-4 ${active ? "" : "text-muted-foreground"}`} />
+                          <span className={`text-sm font-medium ${active ? "" : "text-slate-700"}`}>{label}</span>
+                          {v === "station_delivery" && <Badge variant="secondary" className="text-[9px] h-4 px-1">默认</Badge>}
+                        </div>
+                        <div className="text-xs text-muted-foreground leading-relaxed">{desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {(processMode === "pickup_outsource" || processMode === "delivery_outsource") && (
+                  <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 flex items-start gap-2">
+                    <ArrowRight className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                    <span>外请送货需走外请审批流程，请前往主系统的“外请调度员”入口创建外请子单。</span>
+                  </div>
+                )}
+                {(processMode === "station_delivery" || processMode === "customer_self_deliver") && (
+                  <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 flex items-start gap-2">
+                    <Upload className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                    <span>默认主链流程。在批次创建后可上传货站单据照片（OCR 识别货站单号与实际运费），系统会自动填充货站运单号。</span>
+                  </div>
+                )}
+                {processMode === "customer_pickup" && (
+                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
+                    <Package className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+                    <span>客户自提：在表格中为对应订单点击“标记客户自提”，系统将停止为该主单生成回单。</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* 选择订单 */}
             <Card>
               <CardHeader className="pb-3">
