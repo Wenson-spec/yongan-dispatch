@@ -59,59 +59,14 @@ import {
 } from "./ltlWorkflow.utils";
 import { buildLtlSubchainCreatePath } from "./ltlSubchainPrefill";
 import { getMergedChildDeleteLockReason, getMergedChildRollbackLockReason } from "@/lib/commandGroupRules";
-
-const STATUS_LABELS: Record<string, string> = {
-  pending_assign: "待分配",
-  pending_inquiry: "待询价",
-  inquiry_confirmed: "已询价",
-  shipped: "已发运",
-  pending_price: "待定价",
-  pending_find_vehicle: "待找车",
-  pending_dispatch: "待派车",
-  dispatched: "已调度",
-  in_transit: "运输中",
-  delivered: "已送达",
-  signed: "已签收",
-  settled: "已结算",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  pending_assign: "bg-yellow-100 text-yellow-700",
-  pending_inquiry: "bg-cyan-100 text-cyan-700",
-  inquiry_confirmed: "bg-teal-100 text-teal-700",
-  dispatched: "bg-indigo-100 text-indigo-700",
-  in_transit: "bg-green-100 text-green-700",
-  delivered: "bg-emerald-100 text-emerald-700",
-  signed: "bg-green-200 text-green-800",
-  settled: "bg-green-200 text-green-800",
-};
-
-const ROLLBACK_MAP: Record<string, string> = {
-  pending_price: "待处理",
-  pending_find_vehicle: "待定价",
-  pending_dispatch: "待找车",
-  dispatched: "待派车",
-  in_transit: "已调度",
-  delivered: "运输中",
-  signed: "已送达",
-  inquiry_confirmed: "待询价",
-  pending_inquiry: "",
-  pending_assign: "",
-};
-
-const BUSINESS_TYPE_LABELS: Record<string, string> = {
-  outsource: "外请", self: "自运", ltl: "零担",
-};
-
-const SETTLEMENT_LABELS: Record<string, string> = {
-  monthly: "月结", cash: "现付", collect: "到付",
-};
-
-const RECEIVING_STATUS_LABELS: Record<string, string> = {
-  receivable: "可收货",
-  wait_notice: "等通知",
-  not_receivable: "暂不收货",
-};
+import {
+  STATUS_LABELS,
+  STATUS_COLORS,
+  ROLLBACK_MAP,
+  BUSINESS_TYPE_LABELS,
+  SETTLEMENT_LABELS,
+  RECEIVING_STATUS_LABELS,
+} from "@/lib/orderStatus";
 
 const LEDGER_GROUP_OPTIONS: Array<{ value: LtlMonthlyGroupBy; label: string }> = [
   { value: "destination_station", label: "按目的站" },
@@ -242,6 +197,7 @@ export default function LtlUnifiedWorkspace() {
 
   // ===== 询价相关状态 =====
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const [dragOverOrderId, setDragOverOrderId] = useState<number | null>(null);
   const [showInquiryDialog, setShowInquiryDialog] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [inquiryForm, setInquiryForm] = useState({
@@ -1281,7 +1237,12 @@ export default function LtlUnifiedWorkspace() {
           variant="ghost"
           size="sm"
           className={`h-7 w-7 p-0 ${order.isUrgent ? "text-red-500 hover:bg-red-50" : "text-muted-foreground hover:bg-orange-50 hover:text-orange-500"}`}
-          onClick={() => { setUrgentToggleOrder(order); setUrgentReason(order.urgentReason || ""); }}
+          disabled={updateOrderFields.isPending}
+          onClick={(e: React.MouseEvent) => {
+            e.stopPropagation();
+            setUrgentToggleOrder(order);
+            setUrgentReason(order.urgentReason || "");
+          }}
         >
           <Flame className="h-3.5 w-3.5" />
         </Button>
@@ -1715,7 +1676,7 @@ export default function LtlUnifiedWorkspace() {
           <TabsContent value="confirmed">
             <Card>
               <CardContent className="p-0">
-                <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 text-sm text-blue-700">
+                <div className="sticky top-0 z-10 shadow-sm bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 text-sm text-blue-700">
                   <Truck className="h-4 w-4" />
                   <span>询价完成后，请进入下一步的零担派车环节统一创建派车批次（支持批量派车）。</span>
                   <Button size="sm" variant="link" className="text-blue-700 underline p-0 h-auto" onClick={() => setActiveTab("ltl_dispatch")}>进入下一步：零担派车</Button>
@@ -1750,7 +1711,7 @@ export default function LtlUnifiedWorkspace() {
                     emptyText="当前使用系统默认排序（最近询价更新时间倒序）"
                   />
                 </div>
-                {/* 卡片列表：按目的站分组 */}
+                {/* 表格列表：按目的站分组 */}
                 {confirmedLoading ? (
                   <div className="text-center py-12 text-muted-foreground text-sm">加载中...</div>
                 ) : paginatedConfirmed.length === 0 ? (
@@ -1771,158 +1732,171 @@ export default function LtlUnifiedWorkspace() {
                     }))
                     .sort((a, b) => b.totalWeight - a.totalWeight);
                   const totalGroupPackages = (orders: any[]) => orders.reduce((s, o) => s + (Number(o.packageCount) || 0), 0);
+                  const CONFIRMED_COL_COUNT = 7;
                   return (
-                    <div className="space-y-3 px-4 py-4">
-                      {groups.map(group => {
-                        const groupAllSelected = group.orders.length > 0 && group.orders.every((o: any) => selectedIds.has(o.id));
-                        const groupSomeSelected = group.orders.some((o: any) => selectedIds.has(o.id));
-                        const groupTotalPackages = totalGroupPackages(group.orders);
-                        return (
-                        <div key={group.key} className="rounded-lg border bg-card overflow-hidden">
-                          {/* 分组头 */}
-                          <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-50 border-b">
-                            <Checkbox
-                              checked={groupAllSelected}
-                              data-state={groupAllSelected ? "checked" : groupSomeSelected ? "indeterminate" : "unchecked"}
-                              onCheckedChange={() => {
-                                const next = new Set(selectedIds);
-                                if (groupAllSelected) {
-                                  group.orders.forEach((o: any) => next.delete(o.id));
-                                } else {
-                                  group.orders.forEach((o: any) => next.add(o.id));
-                                }
-                                setSelectedIds(next);
-                              }}
-                            />
-                            <span className="font-semibold text-base text-slate-800">📍 {group.key}</span>
-                            <Badge variant="secondary" className="text-xs">{group.orders.length}单</Badge>
-                            {group.totalWeight > 0 && (
-                              <Badge variant="outline" className="text-xs text-orange-700 border-orange-400 bg-orange-100 font-semibold">
-                                总{group.totalWeight.toFixed(2)}吨
-                              </Badge>
-                            )}
-                            {groupTotalPackages > 0 && (
-                              <Badge variant="outline" className="text-xs text-purple-700 border-purple-300 bg-purple-50">
-                                共{groupTotalPackages}架
-                              </Badge>
-                            )}
-                            {group.totalAmount > 0 && (
-                              <Badge variant="outline" className="text-xs text-green-700 border-green-300 bg-green-50">
-                                运费￥{group.totalAmount.toFixed(0)}
-                              </Badge>
-                            )}
-                          </div>
-                          {/* 订单卡片 */}
-                          <div className="divide-y">
-                            {group.orders.map((order: any) => {
-                              const selected = selectedIds.has(order.id);
+                    <div className="px-4 py-4">
+                      <div className="rounded-lg border bg-card overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-8"></TableHead>
+                              <TableHead>客户订单号</TableHead>
+                              <TableHead>客户·货物</TableHead>
+                              <TableHead>路线·货站</TableHead>
+                              <TableHead>重量架数</TableHead>
+                              <TableHead>运费明细</TableHead>
+                              <TableHead className="text-right">操作</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {groups.map(group => {
+                              const groupAllSelected = group.orders.length > 0 && group.orders.every((o: any) => selectedIds.has(o.id));
+                              const groupSomeSelected = group.orders.some((o: any) => selectedIds.has(o.id));
+                              const groupTotalPackages = totalGroupPackages(group.orders);
                               return (
-                              <div
-                                key={order.id}
-                                className={`px-4 py-3 hover:bg-slate-50/70 transition cursor-pointer ${selected ? "bg-primary/5 ring-1 ring-primary/30" : order.isUrgent ? "bg-red-50/60 border-l-4 border-l-red-500" : ""}`}
-                                onClick={() => toggleSelect(order.id)}
-                              >
-                                <div className="grid grid-cols-12 gap-3 items-start">
-                                  {/* 勾选框 */}
-                                  <div className="col-span-12 sm:col-span-12 md:col-auto flex items-center md:block">
-                                    <Checkbox
-                                      checked={selected}
-                                      onCheckedChange={() => toggleSelect(order.id)}
-                                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                                    />
-                                  </div>
-                                  {/* 订单号+客户 */}
-                                  <div className="col-span-3 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                      {order.isUrgent && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" title="加急"></span>}
-                                      <span className="font-mono text-xs font-semibold truncate">{order.orderNumber || order.systemCode}</span>
-                                      {order.isUrgent && <Badge variant="destructive" className="text-[9px] h-4 px-1 leading-none">急</Badge>}
-                                    </div>
-                                    <div className="text-sm font-medium mt-0.5 truncate">{order.customerName || "-"}</div>
-                                    <div className="text-xs text-muted-foreground truncate">{order.cargoName || "-"}</div>
-                                    <LtlModeBadges order={order} pickupSubchain={getPickupSubchainRecord(order)} deliverySubchain={getDeliverySubchainRecord(order)} />
-                                  </div>
-                                  {/* 路线+货站 */}
-                                  <div className="col-span-3 min-w-0 text-xs">
-                                    <div className="flex items-center gap-1 text-slate-700">
-                                      <span className="text-muted-foreground">路线：</span>
-                                      {order.originCity || "?"} <ArrowRight className="h-3 w-3 inline" /> {order.destinationCity || "?"}
-                                    </div>
-                                    <div className="text-slate-700 mt-0.5">
-                                      <span className="text-muted-foreground">货站：</span>{order.freightStationName || "-"}
-                                    </div>
-                                    <div className="text-slate-700 mt-0.5">
-                                      <span className="text-muted-foreground">运单号：</span>
-                                      {order.freightWaybillNumber ? (
-                                        <span className="inline-flex items-center gap-1">
-                                          <span className="font-mono text-blue-600">{order.freightWaybillNumber}</span>
-                                          <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={(e: React.MouseEvent) => { e.stopPropagation(); setEditWaybillOrder(order); setEditWaybillNumber(order.freightWaybillNumber || ""); setShowEditWaybillDialog(true); }}>
-                                            <Pencil className="h-3 w-3 text-muted-foreground" />
-                                          </Button>
-                                        </span>
-                                      ) : <span className="text-muted-foreground">-</span>}
-                                    </div>
-                                  </div>
-                                  {/* 重量 */}
-                                  <div className="col-span-2 min-w-0 text-xs">
-                                    <div><span className="text-muted-foreground">重量：</span><span className="font-medium">{order.weight || "-"}吨</span></div>
-                                    {order.packageCount && (
-                                      <div className="mt-0.5"><span className="text-muted-foreground">架数：</span>{order.packageCount}</div>
-                                    )}
-                                  </div>
-                                  {/* 运费 */}
-                                  <div className="col-span-2 min-w-0 text-xs">
-                                    {order.dispatchPrice ? (
-                                      <>
-                                        <div className="font-semibold text-orange-600 text-sm">¥{Number(order.dispatchPrice).toFixed(0)}</div>
-                                        {order.ltlUnitPrice && (
-                                          <div className="text-[10px] text-muted-foreground">
-                                            {order.ltlUnitPrice}元/吨×{order.weight || 0}吨
-                                            {order.ltlDeliveryFee && parseFloat(String(order.ltlDeliveryFee)) > 0 ? `+送${order.ltlDeliveryFee}` : ""}
-                                            {order.ltlOtherFee && parseFloat(String(order.ltlOtherFee)) > 0 ? `+其他${order.ltlOtherFee}` : ""}
-                                          </div>
+                                <React.Fragment key={group.key}>
+                                  {/* 分组标题行 */}
+                                  <TableRow className="bg-slate-50 hover:bg-slate-50">
+                                    <TableCell colSpan={CONFIRMED_COL_COUNT} className="py-2">
+                                      <div className="flex items-center gap-3 flex-wrap">
+                                        <Checkbox
+                                          checked={groupAllSelected}
+                                          data-state={groupAllSelected ? "checked" : groupSomeSelected ? "indeterminate" : "unchecked"}
+                                          onCheckedChange={() => {
+                                            const next = new Set(selectedIds);
+                                            if (groupAllSelected) {
+                                              group.orders.forEach((o: any) => next.delete(o.id));
+                                            } else {
+                                              group.orders.forEach((o: any) => next.add(o.id));
+                                            }
+                                            setSelectedIds(next);
+                                          }}
+                                        />
+                                        <span className="font-semibold text-base text-slate-800">📍 {group.key}</span>
+                                        <Badge variant="secondary" className="text-xs">{group.orders.length}单</Badge>
+                                        {group.totalWeight > 0 && (
+                                          <Badge variant="outline" className="text-xs text-orange-700 border-orange-400 bg-orange-100 font-semibold">
+                                            总{group.totalWeight.toFixed(2)}吨
+                                          </Badge>
                                         )}
-                                      </>
-                                    ) : <span className="text-muted-foreground">-</span>}
-                                    {order.dispatcherRemark && (
-                                      <div className="text-xs text-muted-foreground mt-1 truncate" title={order.dispatcherRemark}>备注：{order.dispatcherRemark}</div>
-                                    )}
-                                  </div>
-                                  {/* 操作 */}
-                                  <div className="col-span-2 min-w-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-                                    <div className="flex flex-wrap gap-1 justify-end">
-                                      <UrgentToggleButton order={order} />
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-green-600 hover:bg-green-50" onClick={() => startEdit(order)}>
-                                            <Edit2 className="h-3.5 w-3.5" />
-                                          </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent>编辑信息</TooltipContent>
-                                      </Tooltip>
-                                      <DropdownMenu>
-                                        <DropdownMenuTrigger asChild>
-                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-                                            <MoreHorizontal className="h-3.5 w-3.5" />
-                                          </Button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
-                                          <DropdownMenuItem onClick={() => handleToggleCustomerSelfDeliver(order, !hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG))}>
-                                            <Package className="mr-2 h-4 w-4" />
-                                            {hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG) ? "取消客户自送到站确认" : "客户自送到站确认"}
-                                          </DropdownMenuItem>
-                                        </DropdownMenuContent>
-                                      </DropdownMenu>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
+                                        {groupTotalPackages > 0 && (
+                                          <Badge variant="outline" className="text-xs text-purple-700 border-purple-300 bg-purple-50">
+                                            共{groupTotalPackages}架
+                                          </Badge>
+                                        )}
+                                        {group.totalAmount > 0 && (
+                                          <Badge variant="outline" className="text-xs text-green-700 border-green-300 bg-green-50">
+                                            运费／{group.totalAmount.toFixed(0)}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                  {/* 订单行 */}
+                                  {group.orders.map((order: any) => {
+                                    const selected = selectedIds.has(order.id);
+                                    return (
+                                      <TableRow
+                                        key={order.id}
+                                        className={`cursor-pointer ${selected ? "bg-primary/5" : order.isUrgent ? "bg-red-50/60" : ""}`}
+                                        onClick={() => toggleSelect(order.id)}
+                                      >
+                                        <TableCell className="w-8" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                          <Checkbox
+                                            checked={selected}
+                                            onCheckedChange={() => toggleSelect(order.id)}
+                                          />
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="flex items-center gap-1.5">
+                                            {order.isUrgent && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" title="加急"></span>}
+                                            <span className="font-mono text-xs font-semibold">{order.orderNumber || order.systemCode}</span>
+                                            {order.isUrgent && <Badge variant="destructive" className="text-[9px] h-4 px-1 leading-none">急</Badge>}
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="text-sm font-medium truncate">{order.customerName || "-"}</div>
+                                          <div className="text-xs text-muted-foreground truncate">{order.cargoName || "-"}</div>
+                                          <LtlModeBadges order={order} pickupSubchain={getPickupSubchainRecord(order)} deliverySubchain={getDeliverySubchainRecord(order)} />
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          <div className="flex items-center gap-1 text-slate-700">
+                                            <span className="text-muted-foreground">路线：</span>
+                                            {order.originCity || "?"} <ArrowRight className="h-3 w-3 inline" /> {order.destinationCity || "?"}
+                                          </div>
+                                          <div className="text-slate-700 mt-0.5">
+                                            <span className="text-muted-foreground">货站：</span>{order.freightStationName || "-"}
+                                          </div>
+                                          <div className="text-slate-700 mt-0.5">
+                                            <span className="text-muted-foreground">运单号：</span>
+                                            {order.freightWaybillNumber ? (
+                                              <span className="inline-flex items-center gap-1">
+                                                <span className="font-mono text-blue-600">{order.freightWaybillNumber}</span>
+                                                <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={(e: React.MouseEvent) => { e.stopPropagation(); setEditWaybillOrder(order); setEditWaybillNumber(order.freightWaybillNumber || ""); setShowEditWaybillDialog(true); }}>
+                                                  <Pencil className="h-3 w-3 text-muted-foreground" />
+                                                </Button>
+                                              </span>
+                                            ) : <span className="text-muted-foreground">-</span>}
+                                          </div>
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          <div><span className="text-muted-foreground">重量：</span><span className="font-medium">{order.weight || "-"}吨</span></div>
+                                          {order.packageCount && (
+                                            <div className="mt-0.5"><span className="text-muted-foreground">架数：</span>{order.packageCount}</div>
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          {order.dispatchPrice ? (
+                                            <>
+                                              <div className="font-semibold text-orange-600 text-sm">￥{Number(order.dispatchPrice).toFixed(0)}</div>
+                                              {order.ltlUnitPrice && (
+                                                <div className="text-[10px] text-muted-foreground">
+                                                  {order.ltlUnitPrice}元/吨×{order.weight || 0}吨
+                                                  {order.ltlDeliveryFee && parseFloat(String(order.ltlDeliveryFee)) > 0 ? `+送${order.ltlDeliveryFee}` : ""}
+                                                  {order.ltlOtherFee && parseFloat(String(order.ltlOtherFee)) > 0 ? `+其他${order.ltlOtherFee}` : ""}
+                                                </div>
+                                              )}
+                                            </>
+                                          ) : <span className="text-muted-foreground">-</span>}
+                                          {order.dispatcherRemark && (
+                                            <div className="text-xs text-muted-foreground mt-1 truncate" title={order.dispatcherRemark}>备注：{order.dispatcherRemark}</div>
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-right" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                          <div className="flex flex-wrap gap-1 justify-end">
+                                            <UrgentToggleButton order={order} />
+                                            <Tooltip>
+                                              <TooltipTrigger asChild>
+                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-green-600 hover:bg-green-50" onClick={() => startEdit(order)}>
+                                                  <Edit2 className="h-3.5 w-3.5" />
+                                                </Button>
+                                              </TooltipTrigger>
+                                              <TooltipContent>编辑信息</TooltipContent>
+                                            </Tooltip>
+                                            <DropdownMenu>
+                                              <DropdownMenuTrigger asChild>
+                                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                                </Button>
+                                              </DropdownMenuTrigger>
+                                              <DropdownMenuContent align="end" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                                <DropdownMenuItem onClick={() => handleToggleCustomerSelfDeliver(order, !hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG))}>
+                                                  <Package className="mr-2 h-4 w-4" />
+                                                  {hasLtlTag(order?.remarks, LTL_CUSTOMER_SELF_DELIVER_TAG) ? "取消客户自送到站确认" : "客户自送到站确认"}
+                                                </DropdownMenuItem>
+                                              </DropdownMenuContent>
+                                            </DropdownMenu>
+                                          </div>
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </React.Fragment>
                               );
                             })}
-                          </div>
-                        </div>
-                        );
-                      })}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   );
                 })()}
@@ -1960,7 +1934,7 @@ export default function LtlUnifiedWorkspace() {
                   const canBatchSign = selectedActive.filter((o: any) => o.status === "delivered");
                   const canCombinedDelivery = selectedActive.filter((o: any) => ["shipped", "in_transit"].includes(o.status));
                   return (
-                    <div className="flex items-center gap-3 px-4 py-2.5 bg-blue-50 border-b">
+                    <div className="sticky top-0 z-10 shadow-sm flex items-center gap-3 px-4 py-2.5 bg-blue-50 border-b">
                       <span className="text-sm font-medium text-blue-700">已选 {selectedActive.length} 条</span>
                       <div className="flex items-center gap-2 flex-wrap">
                         {canCombinedDelivery.length > 1 && (
@@ -2087,13 +2061,22 @@ export default function LtlUnifiedWorkspace() {
                               </TableCell>
                             </TableRow>
                           ),
-                          ...grp.orders.map((order: any) => (
-                      <TableRow key={order.id} className={`${selectedIds.has(order.id) ? "bg-primary/5" : order.isUrgent ? "bg-red-50/60 border-l-4 border-l-red-500" : ""} transition-colors`}
-                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add("bg-blue-50"); }}
-                        onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove("bg-blue-50"); }}
+                          ...grp.orders.map((order: any) => {
+                          const isDragOver = dragOverOrderId === order.id;
+                          const rowBg = isDragOver
+                            ? "bg-blue-50 ring-2 ring-blue-300 ring-inset"
+                            : selectedIds.has(order.id)
+                              ? "bg-primary/5"
+                              : order.isUrgent
+                                ? "bg-red-50/60 border-l-4 border-l-red-500"
+                                : "";
+                          return (
+                      <TableRow key={order.id} className={`${rowBg} transition-colors`}
+                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (dragOverOrderId !== order.id) setDragOverOrderId(order.id); }}
+                        onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverOrderId(prev => prev === order.id ? null : prev); }}
                         onDrop={(e) => {
                           e.preventDefault(); e.stopPropagation();
-                          e.currentTarget.classList.remove("bg-blue-50");
+                          setDragOverOrderId(null);
                           const file = e.dataTransfer.files[0];
                           if (file && file.type.startsWith("image/")) {
                             setSelectedOrder(order);
@@ -2175,26 +2158,12 @@ export default function LtlUnifiedWorkspace() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {renderDeliverySubchainButton(order)}
-                            <Tooltip><TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-7 w-7 p-0 ${hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG) ? "text-amber-700 bg-amber-50 hover:bg-amber-100" : "text-amber-600 hover:bg-amber-50"}`}
-                                onClick={() => handleToggleCustomerPickup(order, !hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG))}
-                              >
-                                <Package className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger><TooltipContent>{hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG) ? "取消客户自提标记" : "标记客户自提"}</TooltipContent></Tooltip>
-                            <Tooltip><TooltipTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-amber-600 hover:bg-amber-50" onClick={() => setReceivingNoteOrder(order)}>
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger><TooltipContent>目的站收货确认</TooltipContent></Tooltip>
+                            {/* 外层仅保留 2 个核心按钮：状态流转 + 查看照片 */}
                             {order.status !== "delivered" && order.status !== "signed" && (
                               <Tooltip><TooltipTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-emerald-600 hover:bg-emerald-50"
-                                  onClick={() => {
+                                  onClick={(e: React.MouseEvent) => {
+                                    e.stopPropagation();
                                     if (!order.ltlFinalStation?.trim()) {
                                       toast.error("请先填写目的站点/自提送货站点，再标记已送达");
                                       return;
@@ -2213,44 +2182,78 @@ export default function LtlUnifiedWorkspace() {
                             {order.status === "delivered" && (
                               <Tooltip><TooltipTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-green-600 hover:bg-green-50"
-                                  onClick={() => { updateStatus.mutate({ id: order.id, status: "signed" }, { onSuccess: () => { toast.success("已标记为已签收"); refetchAll(); }, onError: (err) => toast.error(err.message) }); }}
+                                  onClick={(e: React.MouseEvent) => {
+                                    e.stopPropagation();
+                                    updateStatus.mutate({ id: order.id, status: "signed" }, { onSuccess: () => { toast.success("已标记为已签收"); refetchAll(); }, onError: (err) => toast.error(err.message) });
+                                  }}
                                   disabled={updateStatus.isPending}>
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                 </Button>
                               </TooltipTrigger><TooltipContent>标记已签收</TooltipContent></Tooltip>
                             )}
+                            {/* 查看照片（常驻）：有照片时查看，无照片时作为上传入口显性化拖拽提示 */}
+                            {order.stationReceiptUrl ? (
+                              <Tooltip><TooltipTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-purple-600 hover:bg-purple-50"
+                                  onClick={(e: React.MouseEvent) => { e.stopPropagation(); setViewImageUrl(order.stationReceiptUrl || ""); setShowViewImageDialog(true); }}>
+                                  <Eye className="h-3.5 w-3.5" />
+                                </Button>
+                              </TooltipTrigger><TooltipContent>查看照片</TooltipContent></Tooltip>
+                            ) : (
+                              <Tooltip><TooltipTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-blue-600 hover:bg-blue-50"
+                                  onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleOpenUpload(order); }}>
+                                  <Upload className="h-3.5 w-3.5" />
+                                </Button>
+                              </TooltipTrigger><TooltipContent>上传开单照片（亦可拖拽图片到本行）</TooltipContent></Tooltip>
+                            )}
+                            {/* 所有次级操作收纳进下拉菜单 */}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
                                   <MoreHorizontal className="h-3.5 w-3.5" />
                                 </Button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => handleOpenUpload(order)}>
+                              <DropdownMenuContent align="end" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                {["shipped", "in_transit"].includes(order?.status) && (
+                                  <DropdownMenuItem disabled={deliverySubchainStatusLoading || Boolean(getDeliverySubchainRecord(order))} onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleCreateDeliverySubchain(order); }}>
+                                    <Truck className="mr-2 h-4 w-4 text-sky-600" />
+                                    {getDeliverySubchainRecord(order) ? "已转后段外请" : "后段外请车"}
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuItem disabled={updateOrderFields.isPending} onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleToggleCustomerPickup(order, !hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG)); }}>
+                                  <Package className="mr-2 h-4 w-4 text-amber-600" />
+                                  {hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG) ? "取消客户自提标记" : "标记客户自提"}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); setReceivingNoteOrder(order); }}>
+                                  <Pencil className="mr-2 h-4 w-4 text-amber-600" />
+                                  目的站收货确认
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); handleOpenUpload(order); }}>
                                   <Camera className="mr-2 h-4 w-4" />
                                   上传开单
                                 </DropdownMenuItem>
                                 {order.stationReceiptUrl && (
-                                  <DropdownMenuItem onClick={() => { setViewImageUrl(order.stationReceiptUrl || ""); setShowViewImageDialog(true); }}>
+                                  <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); setViewImageUrl(order.stationReceiptUrl || ""); setShowViewImageDialog(true); }}>
                                     <Eye className="mr-2 h-4 w-4" />
                                     查看照片
                                   </DropdownMenuItem>
                                 )}
-                                <DropdownMenuItem onClick={() => openManualReview(order)}>
-                                  <AlertTriangle className="mr-2 h-4 w-4" />
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); openManualReview(order); }}>
+                                  <AlertTriangle className="mr-2 h-4 w-4 text-red-600" />
                                   异常复核
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => startEdit(order)}>
-                                  <Edit2 className="mr-2 h-4 w-4" />
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); startEdit(order); }}>
+                                  <Edit2 className="mr-2 h-4 w-4 text-green-600" />
                                   编辑信息
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => { setUrgentToggleOrder(order); setUrgentReason(order.urgentReason || ""); }}>
-                                  <Flame className="mr-2 h-4 w-4" />
+                                <DropdownMenuItem disabled={updateOrderFields.isPending} onClick={(e: React.MouseEvent) => { e.stopPropagation(); setUrgentToggleOrder(order); setUrgentReason(order.urgentReason || ""); }}>
+                                  <Flame className="mr-2 h-4 w-4 text-orange-600" />
                                   {order.isUrgent ? "取消加急" : "标记加急"}
                                 </DropdownMenuItem>
                                 {canRollback(order.status) && hasPermission("order.rollback") && (
-                                  <DropdownMenuItem onClick={() => openRollbackDialog(order)}>
-                                    <Undo2 className="mr-2 h-4 w-4" />
+                                  <DropdownMenuItem disabled={rollbackMutation.isPending} onClick={(e: React.MouseEvent) => { e.stopPropagation(); openRollbackDialog(order); }}>
+                                    <Undo2 className="mr-2 h-4 w-4 text-orange-600" />
                                     退回
                                   </DropdownMenuItem>
                                 )}
@@ -2259,7 +2262,8 @@ export default function LtlUnifiedWorkspace() {
                           </div>
                         </TableCell>
                       </TableRow>
-                          )),
+                          );
+                        }),
                         ];
                       });
                     })()}
@@ -2411,21 +2415,15 @@ export default function LtlUnifiedWorkspace() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-0.5">
-                            {order.stationReceiptUrl && (
-                              <Tooltip><TooltipTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-purple-600 hover:bg-purple-50"
-                                  onClick={() => { setViewImageUrl(order.stationReceiptUrl || ""); setShowViewImageDialog(true); }}>
-                                  <Eye className="h-3.5 w-3.5" />
-                                </Button>
-                              </TooltipTrigger><TooltipContent>查看照片</TooltipContent></Tooltip>
-                            )}
+                          <div className="flex items-center justify-end gap-1">
+                            {/* 外层仅保留 2 个核心按钮：前往回单台 + 查看照片 */}
                             <Tooltip><TooltipTrigger asChild>
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 className={`h-7 w-7 p-0 ${hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG) ? "text-slate-400 hover:bg-slate-50" : order.podOwnership === "delivery_outsource" ? "text-amber-600 hover:bg-amber-50" : "text-sky-600 hover:bg-sky-50"}`}
-                                onClick={() => {
+                                onClick={(e: React.MouseEvent) => {
+                                  e.stopPropagation();
                                   if (hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG)) {
                                     toast.info("该零担主单已标记客户自提，不生成回单");
                                     return;
@@ -2439,38 +2437,46 @@ export default function LtlUnifiedWorkspace() {
                                 <FileText className="h-3.5 w-3.5" />
                               </Button>
                             </TooltipTrigger><TooltipContent>{hasLtlTag(order?.remarks, LTL_CUSTOMER_PICKUP_TAG) ? "客户自提不生成回单" : order.podOwnership === "delivery_outsource" ? "回单已转后段外请负责" : order.status === "settled" ? "前往回单押金台查看已收回单" : "前往回单押金台查看待收回单"}</TooltipContent></Tooltip>
-                            <Tooltip><TooltipTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-600 hover:bg-red-50" onClick={() => openManualReview(order)}>
-                                <AlertTriangle className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger><TooltipContent>异常复核</TooltipContent></Tooltip>
-                            <Tooltip><TooltipTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-amber-600 hover:bg-amber-50" onClick={() => setReceivingNoteOrder(order)}>
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger><TooltipContent>查看收货确认</TooltipContent></Tooltip>
-                            <Tooltip><TooltipTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-green-600 hover:bg-green-50" onClick={() => startEdit(order)}>
-                                <Edit2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger><TooltipContent>编辑信息</TooltipContent></Tooltip>
-                            <UrgentToggleButton order={order} />
-                            {(canRollback(order.status) && hasPermission("order.rollback") || hasPermission("order.delete")) && (
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground">
-                                    <MoreHorizontal className="h-3.5 w-3.5" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  {canRollback(order.status) && hasPermission("order.rollback") && (
-                                    <DropdownMenuItem onClick={() => openRollbackDialog(order)}>
-                                      <Undo2 className="mr-2 h-3.5 w-3.5 text-orange-600" />退回
-                                    </DropdownMenuItem>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                            {order.stationReceiptUrl && (
+                              <Tooltip><TooltipTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-purple-600 hover:bg-purple-50"
+                                  onClick={(e: React.MouseEvent) => { e.stopPropagation(); setViewImageUrl(order.stationReceiptUrl || ""); setShowViewImageDialog(true); }}>
+                                  <Eye className="h-3.5 w-3.5" />
+                                </Button>
+                              </TooltipTrigger><TooltipContent>查看照片</TooltipContent></Tooltip>
                             )}
+                            {/* 所有次级操作收纳进下拉菜单 */}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); openManualReview(order); }}>
+                                  <AlertTriangle className="mr-2 h-4 w-4 text-red-600" />
+                                  异常复核
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); setReceivingNoteOrder(order); }}>
+                                  <Pencil className="mr-2 h-4 w-4 text-amber-600" />
+                                  查看收货确认
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={(e: React.MouseEvent) => { e.stopPropagation(); startEdit(order); }}>
+                                  <Edit2 className="mr-2 h-4 w-4 text-green-600" />
+                                  编辑信息
+                                </DropdownMenuItem>
+                                <DropdownMenuItem disabled={updateOrderFields.isPending} onClick={(e: React.MouseEvent) => { e.stopPropagation(); setUrgentToggleOrder(order); setUrgentReason(order.urgentReason || ""); }}>
+                                  <Flame className="mr-2 h-4 w-4 text-orange-600" />
+                                  {order.isUrgent ? "取消加急" : "标记加急"}
+                                </DropdownMenuItem>
+                                {canRollback(order.status) && hasPermission("order.rollback") && (
+                                  <DropdownMenuItem disabled={rollbackMutation.isPending} onClick={(e: React.MouseEvent) => { e.stopPropagation(); openRollbackDialog(order); }}>
+                                    <Undo2 className="mr-2 h-4 w-4 text-orange-600" />
+                                    退回
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </TableCell>
                       </TableRow>

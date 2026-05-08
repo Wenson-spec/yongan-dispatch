@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { STATUS_LABELS, STATUS_COLORS } from "@/lib/orderStatus";
 import { fmtDate } from "@/lib/dateUtils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +27,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import { toast } from "sonner";
 import { TablePagination } from "@/components/TablePagination";
 import * as XLSX from "xlsx";
@@ -71,7 +73,8 @@ export default function LtlDispatchWorkspace() {
   // 智能拼货推荐
   const [showSmartConsolidate, setShowSmartConsolidate] = useState(false);
   const [smartVehicleLength, setSmartVehicleLength] = useState("");
-  const [smartVehicleModel, setSmartVehicleModel] = useState("");
+  // 运力柔性：车型改为多选（例如 13 米平板与 13 米高栏 金砖等货物可互换）
+  const [smartVehicleModels, setSmartVehicleModels] = useState<string[]>([]);
   const [smartCapacity, setSmartCapacity] = useState<string>("");
   const [smartTargetCity, setSmartTargetCity] = useState<string>("");
 
@@ -361,26 +364,6 @@ export default function LtlDispatchWorkspace() {
     toast.success(`已导出：${fileName}`);
   };
 
-  const STATUS_LABELS: Record<string, string> = {
-    inquiry_confirmed: "已询价",
-    dispatched: "已发运",
-    shipped: "已发运",
-    in_transit: "运输中",
-    delivered: "已送达",
-    signed: "已签收",
-    settled: "已结算",
-  };
-
-  const STATUS_COLORS: Record<string, string> = {
-    inquiry_confirmed: "bg-teal-100 text-teal-700",
-    dispatched: "bg-blue-100 text-blue-700",
-    shipped: "bg-blue-100 text-blue-700",
-    in_transit: "bg-green-100 text-green-700",
-    delivered: "bg-emerald-100 text-emerald-700",
-    signed: "bg-green-200 text-green-800",
-    settled: "bg-green-200 text-green-800",
-  };
-
   return (
     <div className="space-y-4">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -513,7 +496,7 @@ export default function LtlDispatchWorkspace() {
                     </Button>
                   </div>
                 )}
-                {/* 按目的站分组的卡片列表 */}
+                {/* 按目的站分组的表格列表 */}
                 {availableOrders.length === 0 ? (
                   <div className="text-center py-12 text-muted-foreground text-sm">
                     {activeBatchFilter.length > 0
@@ -536,120 +519,135 @@ export default function LtlDispatchWorkspace() {
                       orders,
                       totalWeight: orders.reduce((s, o) => s + (Number(o.weight) || 0), 0),
                       totalPackages: orders.reduce((s, o) => s + (Number(o.packageCount) || 0), 0),
+                      totalAmount: orders.reduce((s, o) => s + (Number(o.dispatchPrice) || Number(o.totalCost) || 0), 0),
                     }))
                     .sort((a, b) => b.totalWeight - a.totalWeight);
+                  const DISPATCH_COL_COUNT = 7;
                   return (
-                    <div className="space-y-3 px-4 pb-4">
-                      {groups.map(group => {
-                        const allSelected = group.orders.every(o => selectedOrderIds.has(o.id));
-                        const someSelected = group.orders.some(o => selectedOrderIds.has(o.id));
-                        return (
-                          <div key={group.key} className="rounded-lg border bg-card overflow-hidden">
-                            {/* 分组头 */}
-                            <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b">
-                              <div className="flex items-center gap-3">
-                                <Checkbox
-                                  checked={allSelected}
-                                  data-state={allSelected ? "checked" : someSelected ? "indeterminate" : "unchecked"}
-                                  onCheckedChange={() => {
-                                    setSelectedOrderIds(prev => {
-                                      const next = new Set(prev);
-                                      if (allSelected) group.orders.forEach(o => next.delete(o.id));
-                                      else group.orders.forEach(o => next.add(o.id));
-                                      return next;
-                                    });
-                                  }}
-                                />
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-base text-slate-800">📍 {group.key}</span>
-                                  <Badge variant="secondary" className="text-xs">{group.orders.length}单</Badge>
-                                  <Badge variant="outline" className="text-xs text-orange-700 border-orange-300 bg-orange-50">
-                                    总{group.totalWeight.toFixed(2)}吨
-                                  </Badge>
-                                  {group.totalPackages > 0 && (
-                                    <Badge variant="outline" className="text-xs">共{group.totalPackages}架</Badge>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                            {/* 卡片列表 */}
-                            <div className="divide-y">
-                              {group.orders.map((order: any) => {
-                                const selected = selectedOrderIds.has(order.id);
-                                return (
-                                  <div
-                                    key={order.id}
-                                    className={`flex gap-3 px-4 py-3 hover:bg-slate-50/70 cursor-pointer transition ${selected ? "bg-primary/5" : ""} ${order.isUrgent ? "bg-red-50/40" : ""}`}
-                                    onClick={() => toggleOrderSelect(order.id)}
-                                  >
-                                    <Checkbox
-                                      checked={selected}
-                                      onCheckedChange={() => toggleOrderSelect(order.id)}
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="mt-1"
-                                    />
-                                    <div className="flex-1 min-w-0 grid grid-cols-12 gap-3 text-sm">
-                                      {/* 订单号+客户 */}
-                                      <div className="col-span-3 min-w-0">
-                                        <div className="flex items-center gap-1.5">
-                                          {order.isUrgent && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" title="加急"></span>}
-                                          <span className="font-mono text-xs font-semibold truncate">{order.orderNumber || order.systemCode}</span>
-                                          {order.isUrgent && <Badge variant="destructive" className="text-[9px] h-4 px-1">急</Badge>}
-                                        </div>
-                                        <div className="text-sm font-medium mt-0.5 truncate">{order.customerName || "-"}</div>
-                                        <div className="text-xs text-muted-foreground truncate">{order.cargoName || "-"}</div>
-                                      </div>
-                                      {/* 路线+货站 */}
-                                      <div className="col-span-3 min-w-0">
-                                        <div className="text-xs text-slate-700">
-                                          <span className="text-muted-foreground">路线：</span>
-                                          {order.originCity || "?"} → {order.destinationCity || "?"}
-                                        </div>
-                                        <div className="text-xs text-slate-700 mt-0.5">
-                                          <span className="text-muted-foreground">货站：</span>{order.freightStationName || "-"}
-                                        </div>
-                                        {order.ltlFinalStation && (
-                                          <div className="text-xs text-slate-700 mt-0.5">
-                                            <span className="text-muted-foreground">目的站：</span>{order.ltlFinalStation}
-                                          </div>
-                                        )}
-                                      </div>
-                                      {/* 重量+架数 */}
-                                      <div className="col-span-2 min-w-0 text-xs">
-                                        <div><span className="text-muted-foreground">重量：</span><span className="font-medium">{order.weight || "-"}吨</span></div>
-                                        <div className="mt-0.5"><span className="text-muted-foreground">架数：</span>{order.packageCount || "-"}</div>
-                                      </div>
-                                      {/* 运费 */}
-                                      <div className="col-span-2 min-w-0 text-xs">
-                                        {order.dispatchPrice ? (
-                                          <>
-                                            <div className="font-semibold text-orange-600">¥{Number(order.dispatchPrice).toFixed(0)}</div>
-                                            {order.ltlUnitPrice && (
-                                              <div className="text-[10px] text-muted-foreground">
-                                                {order.ltlUnitPrice}元/吨×{order.weight || 0}吨
-                                                {order.ltlDeliveryFee && parseFloat(String(order.ltlDeliveryFee)) > 0 ? `+送${order.ltlDeliveryFee}` : ""}
-                                              </div>
-                                            )}
-                                          </>
-                                        ) : order.totalCost ? <span className="font-semibold text-orange-600">¥{order.totalCost}</span> : <span className="text-muted-foreground">-</span>}
-                                      </div>
-                                      {/* 状态+备注 */}
-                                      <div className="col-span-2 min-w-0">
-                                        <Badge className={STATUS_COLORS[order.status] || "bg-gray-100 text-gray-700"} variant="secondary">
-                                          {STATUS_LABELS[order.status] || order.status}
+                    <div className="px-4 pb-4">
+                      <div className="rounded-lg border bg-card overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-8"></TableHead>
+                              <TableHead>客户订单号</TableHead>
+                              <TableHead>客户·货物</TableHead>
+                              <TableHead>路线·货站</TableHead>
+                              <TableHead>重量架数</TableHead>
+                              <TableHead>运费明细</TableHead>
+                              <TableHead className="text-right">状态·备注</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {groups.map(group => {
+                              const allSelected = group.orders.every(o => selectedOrderIds.has(o.id));
+                              const someSelected = group.orders.some(o => selectedOrderIds.has(o.id));
+                              return (
+                                <Fragment key={group.key}>
+                                  {/* 分组标题行 */}
+                                  <TableRow className="bg-slate-50 hover:bg-slate-50">
+                                    <TableCell colSpan={DISPATCH_COL_COUNT} className="py-2">
+                                      <div className="flex items-center gap-3 flex-wrap">
+                                        <Checkbox
+                                          checked={allSelected}
+                                          data-state={allSelected ? "checked" : someSelected ? "indeterminate" : "unchecked"}
+                                          onCheckedChange={() => {
+                                            setSelectedOrderIds(prev => {
+                                              const next = new Set(prev);
+                                              if (allSelected) group.orders.forEach(o => next.delete(o.id));
+                                              else group.orders.forEach(o => next.add(o.id));
+                                              return next;
+                                            });
+                                          }}
+                                        />
+                                        <span className="font-semibold text-base text-slate-800">📍 {group.key}</span>
+                                        <Badge variant="secondary" className="text-xs">{group.orders.length}单</Badge>
+                                        <Badge variant="outline" className="text-xs text-orange-700 border-orange-300 bg-orange-50">
+                                          总{group.totalWeight.toFixed(2)}吨
                                         </Badge>
-                                        {order.dispatcherRemark && (
-                                          <div className="text-xs text-muted-foreground mt-1 truncate" title={order.dispatcherRemark}>备注：{order.dispatcherRemark}</div>
+                                        {group.totalPackages > 0 && (
+                                          <Badge variant="outline" className="text-xs text-purple-700 border-purple-300 bg-purple-50">共{group.totalPackages}架</Badge>
+                                        )}
+                                        {group.totalAmount > 0 && (
+                                          <Badge variant="outline" className="text-xs text-green-700 border-green-300 bg-green-50">运费／{group.totalAmount.toFixed(0)}</Badge>
                                         )}
                                       </div>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
+                                    </TableCell>
+                                  </TableRow>
+                                  {/* 订单行 */}
+                                  {group.orders.map((order: any) => {
+                                    const selected = selectedOrderIds.has(order.id);
+                                    return (
+                                      <TableRow
+                                        key={order.id}
+                                        className={`cursor-pointer ${selected ? "bg-primary/5" : order.isUrgent ? "bg-red-50/40" : ""}`}
+                                        onClick={() => toggleOrderSelect(order.id)}
+                                      >
+                                        <TableCell className="w-8" onClick={(e) => e.stopPropagation()}>
+                                          <Checkbox
+                                            checked={selected}
+                                            onCheckedChange={() => toggleOrderSelect(order.id)}
+                                          />
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="flex items-center gap-1.5">
+                                            {order.isUrgent && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" title="加急"></span>}
+                                            <span className="font-mono text-xs font-semibold">{order.orderNumber || order.systemCode}</span>
+                                            {order.isUrgent && <Badge variant="destructive" className="text-[9px] h-4 px-1">急</Badge>}
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="text-sm font-medium truncate">{order.customerName || "-"}</div>
+                                          <div className="text-xs text-muted-foreground truncate">{order.cargoName || "-"}</div>
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          <div className="text-slate-700">
+                                            <span className="text-muted-foreground">路线：</span>
+                                            {order.originCity || "?"} → {order.destinationCity || "?"}
+                                          </div>
+                                          <div className="text-slate-700 mt-0.5">
+                                            <span className="text-muted-foreground">货站：</span>{order.freightStationName || "-"}
+                                          </div>
+                                          {order.ltlFinalStation && (
+                                            <div className="text-slate-700 mt-0.5">
+                                              <span className="text-muted-foreground">目的站：</span>{order.ltlFinalStation}
+                                            </div>
+                                          )}
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          <div><span className="text-muted-foreground">重量：</span><span className="font-medium">{order.weight || "-"}吨</span></div>
+                                          <div className="mt-0.5"><span className="text-muted-foreground">架数：</span>{order.packageCount || "-"}</div>
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                          {order.dispatchPrice ? (
+                                            <>
+                                              <div className="font-semibold text-orange-600">￥{Number(order.dispatchPrice).toFixed(0)}</div>
+                                              {order.ltlUnitPrice && (
+                                                <div className="text-[10px] text-muted-foreground">
+                                                  {order.ltlUnitPrice}元/吨×{order.weight || 0}吨
+                                                  {order.ltlDeliveryFee && parseFloat(String(order.ltlDeliveryFee)) > 0 ? `+送${order.ltlDeliveryFee}` : ""}
+                                                </div>
+                                              )}
+                                            </>
+                                          ) : order.totalCost ? <span className="font-semibold text-orange-600">￥{order.totalCost}</span> : <span className="text-muted-foreground">-</span>}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                          <Badge className={STATUS_COLORS[order.status] || "bg-gray-100 text-gray-700"} variant="secondary">
+                                            {STATUS_LABELS[order.status] || order.status}
+                                          </Badge>
+                                          {order.dispatcherRemark && (
+                                            <div className="text-xs text-muted-foreground mt-1 truncate" title={order.dispatcherRemark}>备注：{order.dispatcherRemark}</div>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </Fragment>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   );
                 })()}
@@ -1084,19 +1082,24 @@ export default function LtlDispatchWorkspace() {
         onOpenChange={setShowSmartConsolidate}
         vehicleLength={smartVehicleLength}
         setVehicleLength={setSmartVehicleLength}
-        vehicleModel={smartVehicleModel}
-        setVehicleModel={setSmartVehicleModel}
+        vehicleModels={smartVehicleModels}
+        setVehicleModels={setSmartVehicleModels}
         capacity={smartCapacity}
         setCapacity={setSmartCapacity}
         targetCity={smartTargetCity}
         setTargetCity={setSmartTargetCity}
         availableOrders={availableOrders}
-        onApply={(orderIds, recommendedLength, recommendedModel, recommendedCapacity) => {
+        onApply={(orderIds, recommendedLength, recommendedModels, recommendedCapacity) => {
           // 1. 勾选推荐订单
           setSelectedOrderIds(new Set(orderIds));
-          // 2. 预填充车型表单
+          // 2. 预填充车型表单（后端持久化仅接受单一车型，多选时带出首个并提示）
           if (recommendedLength) setVehicleLength(recommendedLength);
-          if (recommendedModel) setVehicleModel(recommendedModel);
+          if (recommendedModels && recommendedModels.length > 0) {
+            setVehicleModel(recommendedModels[0]);
+            if (recommendedModels.length > 1) {
+              toast.info(`已预填车型：${recommendedModels[0]}（备选：${recommendedModels.slice(1).join("、")}）。可在右侧表单手动修改。`);
+            }
+          }
           if (recommendedCapacity) setCapacity(String(recommendedCapacity));
           // 3. 关闭拼货弹窗
           setShowSmartConsolidate(false);
@@ -1146,21 +1149,22 @@ interface SmartConsolidateDialogProps {
   onOpenChange: (open: boolean) => void;
   vehicleLength: string;
   setVehicleLength: (v: string) => void;
-  vehicleModel: string;
-  setVehicleModel: (v: string) => void;
+  /** 运力柔性：车型为多选，空数组表示不限 */
+  vehicleModels: string[];
+  setVehicleModels: (v: string[]) => void;
   capacity: string;
   setCapacity: (v: string) => void;
   targetCity: string;
   setTargetCity: (v: string) => void;
   availableOrders: any[];
-  onApply: (orderIds: number[], vehicleLength: string, vehicleModel: string, capacity: number) => void;
+  onApply: (orderIds: number[], vehicleLength: string, vehicleModels: string[], capacity: number) => void;
 }
 
 function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
   const {
     open, onOpenChange,
     vehicleLength, setVehicleLength,
-    vehicleModel, setVehicleModel,
+    vehicleModels, setVehicleModels,
     capacity, setCapacity,
     targetCity, setTargetCity,
     availableOrders, onApply,
@@ -1183,7 +1187,7 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
     {
       capacity: capacityNum,
       vehicleLength: vehicleLength || undefined,
-      vehicleModel: vehicleModel || undefined,
+      vehicleModels: vehicleModels.length > 0 ? vehicleModels : undefined,
       targetDestinationCity: targetCity || undefined,
       maxRecommendations: 5,
       fillRateMin: 0.3,
@@ -1230,18 +1234,20 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
               </Select>
             </div>
             <div>
-              <Label className="text-xs">车型</Label>
-              <Select value={vehicleModel} onValueChange={setVehicleModel}>
-                <SelectTrigger className="h-9 mt-1">
-                  <SelectValue placeholder="选择车型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="高栏">高栏</SelectItem>
-                  <SelectItem value="平板">平板</SelectItem>
-                  <SelectItem value="厢式">厢式</SelectItem>
-                  <SelectItem value="飞翼">飞翼</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="text-xs">车型（可多选，任一匹配即可）</Label>
+              <ToggleGroup
+                type="multiple"
+                value={vehicleModels}
+                onValueChange={(v: string[]) => setVehicleModels(v)}
+                variant="outline"
+                size="sm"
+                className="mt-1 flex-wrap justify-start"
+              >
+                <ToggleGroupItem value="高栏" aria-label="高栏">高栏</ToggleGroupItem>
+                <ToggleGroupItem value="平板" aria-label="平板">平板</ToggleGroupItem>
+                <ToggleGroupItem value="厢式" aria-label="厢式">厢式</ToggleGroupItem>
+                <ToggleGroupItem value="飞翼" aria-label="飞翼">飞翼</ToggleGroupItem>
+              </ToggleGroup>
             </div>
             <div>
               <Label className="text-xs">载重(吨)<span className="text-red-500">*</span></Label>
@@ -1323,7 +1329,7 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
                         className="bg-violet-600 hover:bg-violet-700"
                         onClick={() => {
                           const ids = rec.orders.map((o: any) => o.id);
-                          onApply(ids, vehicleLength, vehicleModel, capacityNum);
+                          onApply(ids, vehicleLength, vehicleModels, capacityNum);
                         }}
                       >
                         <Truck className="h-3.5 w-3.5 mr-1" />
