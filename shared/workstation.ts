@@ -39,6 +39,7 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
       { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package", group: "工位操作" },
       { key: "pod-deposit", label: "回单管理台", path: "/station/pod-deposit", icon: "FileText", group: "工位操作" },
       { key: "hold-station", label: "等通知专区", path: "/station/hold", icon: "PauseCircle", group: "工位操作" },
+      { key: "customer-ledger", label: "客户台账（财务账期）", path: "/customer-ledger", icon: "DollarSign", group: "数据报表" },
       { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
 
       { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
@@ -70,7 +71,10 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "零担统一工作台",
     homePath: "/station/ltl-workspace",
     menuItems: [
-      { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package" },
+      { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package", group: "工位操作" },
+      { key: "customer-ledger", label: "客户台账", path: "/customer-ledger", icon: "DollarSign", group: "数据报表" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
     ],
   },
 
@@ -79,7 +83,10 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "零担统一工作台",
     homePath: "/station/ltl-workspace",
     menuItems: [
-      { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package" },
+      { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package", group: "工位操作" },
+      { key: "chain-workspace", label: "链式工作台", path: "/station/chain-workspace", icon: "Columns3", group: "工位操作" },
+      { key: "customer-ledger", label: "客户台账", path: "/customer-ledger", icon: "DollarSign", group: "数据报表" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
     ],
   },
 
@@ -88,12 +95,13 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "指挥台",
     homePath: "/station/command",
     menuItems: [
-      { key: "command-center", label: "指挥台", path: "/station/command", icon: "LayoutDashboard" },
-      { key: "hold-station", label: "等通知专区", path: "/station/hold", icon: "PauseCircle" },
-      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText" },
-      { key: "regions", label: "区域配置", path: "/config/regions", icon: "MapPin" },
-      { key: "customers", label: "客户管理", path: "/config/customers", icon: "UserCog" },
-      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History" },
+      { key: "command-center", label: "指挥台", path: "/station/command", icon: "LayoutDashboard", group: "工位操作" },
+      { key: "hold-station", label: "等通知专区", path: "/station/hold", icon: "PauseCircle", group: "工位操作" },
+      { key: "customer-ledger", label: "客户台账（财务账期）", path: "/customer-ledger", icon: "DollarSign", group: "数据报表" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
+      { key: "regions", label: "区域配置", path: "/config/regions", icon: "MapPin", group: "系统配置" },
+      { key: "customers", label: "客户管理", path: "/config/customers", icon: "UserCog", group: "系统配置" },
     ],
   },
 
@@ -102,7 +110,9 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "找车台",
     homePath: "/station/find-vehicle",
     menuItems: [
-      { key: "find-vehicle", label: "找车台", path: "/station/find-vehicle", icon: "Truck" },
+      { key: "find-vehicle", label: "找车台", path: "/station/find-vehicle", icon: "Truck", group: "工位操作" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
     ],
   },
 
@@ -111,9 +121,12 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "派车台",
     homePath: "/station/dispatch-vehicle",
     menuItems: [
-      { key: "dispatch-vehicle", label: "派车台", path: "/station/dispatch-vehicle", icon: "Truck" },
-      { key: "vehicles", label: "车辆管理", path: "/config/vehicles", icon: "Truck" },
-      { key: "drivers", label: "司机管理", path: "/config/drivers", icon: "UserCog" },
+      { key: "dispatch-vehicle", label: "派车台", path: "/station/dispatch-vehicle", icon: "Truck", group: "工位操作" },
+      { key: "ltl-dispatch", label: "零担派车", path: "/station/ltl-dispatch", icon: "Package", group: "工位操作" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
+      { key: "vehicles", label: "车辆管理", path: "/config/vehicles", icon: "Truck", group: "系统配置" },
+      { key: "drivers", label: "司机管理", path: "/config/drivers", icon: "UserCog", group: "系统配置" },
     ],
   },
 
@@ -122,7 +135,9 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "派车台",
     homePath: "/station/dispatch-vehicle",
     menuItems: [
-      { key: "dispatch-vehicle", label: "派车台", path: "/station/dispatch-vehicle", icon: "Truck" },
+      { key: "dispatch-vehicle", label: "派车台", path: "/station/dispatch-vehicle", icon: "Truck", group: "工位操作" },
+      { key: "ltl-dispatch", label: "零担派车", path: "/station/ltl-dispatch", icon: "Package", group: "工位操作" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
     ],
   },
 
@@ -131,7 +146,11 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "零担统一工作台",
     homePath: "/station/ltl-workspace",
     menuItems: [
-      { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package" },
+      { key: "ltl-workspace", label: "零担统一工作台", path: "/station/ltl-workspace", icon: "Package", group: "工位操作" },
+      { key: "ltl-dispatch", label: "零担派车", path: "/station/ltl-dispatch", icon: "Truck", group: "工位操作" },
+      { key: "customer-ledger", label: "客户台账", path: "/customer-ledger", icon: "DollarSign", group: "数据报表" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "数据报表" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "数据报表" },
     ],
   },
 
@@ -140,7 +159,10 @@ export const WORKSTATION_CONFIGS: Record<string, WorkstationConfig> = {
     label: "回单管理台",
     homePath: "/station/pod-deposit",
     menuItems: [
-      { key: "pod-deposit", label: "回单管理台", path: "/station/pod-deposit", icon: "FileText" },
+      { key: "pod-deposit", label: "回单管理台", path: "/station/pod-deposit", icon: "FileText", group: "工位操作" },
+      { key: "customer-ledger", label: "客户台账（财务账期）", path: "/customer-ledger", icon: "DollarSign", group: "财务报表" },
+      { key: "freight-rates", label: "运价数据库", path: "/freight-rates", icon: "ScrollText", group: "财务报表" },
+      { key: "logs", label: "操作日志", path: "/operation-logs", icon: "History", group: "财务报表" },
     ],
   },
 };

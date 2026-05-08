@@ -27,6 +27,10 @@ import SmartPaste from "./pages/SmartPaste";
 import OcrVerify from "./pages/OcrVerify";
 
 import FreightRateDB from "./pages/FreightRateDB";
+import CustomerLedger from "./pages/CustomerLedger";
+import OrderPool from "./pages/OrderPool";
+import LtlDispatch from "./pages/LtlDispatch";
+import ChainWorkspace from "./pages/ChainWorkspace";
 
 import OperationLog from "./pages/OperationLog";
 
@@ -62,7 +66,10 @@ function Router() {
       <Route path="/station/ltl-workspace">{() => (<Suspense fallback={<div className="p-8 text-center text-muted-foreground">加载中...</div>}><LtlUnifiedWorkspace /></Suspense>)}</Route>
       {/* 历史零担入口保留重定向兼容 */}
       <Route path="/station/ltl-inquiry" component={LtlInquiryStation} />
-      <Route path="/station/chain-workspace" component={LtlWorkspace} />
+      {/* 链式工作台（独立页面，原误指向 LtlWorkspace 已修复） */}
+      <Route path="/station/chain-workspace" component={ChainWorkspace} />
+      {/* 零担派车专用入口（独立页面） */}
+      <Route path="/station/ltl-dispatch" component={LtlDispatch} />
       {/* 财务助理回单押金台 */}
       <Route path="/station/pod-deposit" component={PodDepositStation} />
       {/* 等通知专区 */}
@@ -78,8 +85,10 @@ function Router() {
       <Route path="/tools/ocr-verify" component={OcrVerify} />
 
       <Route path="/freight-rates" component={FreightRateDB} />
-      {/* 客户台账历史入口兼容到零担统一工作台 */}
-      <Route path="/customer-ledger" component={LtlWorkspace} />
+      {/* 客户台账（财务账期） — 修复：原 /customer-ledger 错指 LtlWorkspace，现指向 CustomerLedger */}
+      <Route path="/customer-ledger" component={CustomerLedger} />
+      {/* 订单池 */}
+      <Route path="/orders/pool" component={OrderPool} />
       <Route path="/operation-logs" component={OperationLog} />
 
       {/* 系统设置 */}

@@ -47,6 +47,7 @@ import {
   History,
   DollarSign,
   PauseCircle,
+  HardDrive,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState, useMemo } from "react";
 import { useLocation } from "wouter";
@@ -73,6 +74,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   History,
   DollarSign,
   PauseCircle,
+  HardDrive,
 };
 
 function getIcon(iconName: string): React.ComponentType<{ className?: string }> {
