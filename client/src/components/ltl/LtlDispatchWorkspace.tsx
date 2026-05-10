@@ -76,7 +76,7 @@ export default function LtlDispatchWorkspace() {
   // 运力柔性：车型改为多选（例如 13 米平板与 13 米高栏 金砖等货物可互换）
   const [smartVehicleModels, setSmartVehicleModels] = useState<string[]>([]);
   const [smartCapacity, setSmartCapacity] = useState<string>("");
-  const [smartTargetCity, setSmartTargetCity] = useState<string>("");
+  const [smartOriginCities, setSmartOriginCities] = useState<string[]>([]);
 
   const [viewBatchId, setViewBatchId] = useState<number | null>(null);
   const [deleteBatchId, setDeleteBatchId] = useState<number | null>(null);
@@ -1086,8 +1086,8 @@ export default function LtlDispatchWorkspace() {
         setVehicleModels={setSmartVehicleModels}
         capacity={smartCapacity}
         setCapacity={setSmartCapacity}
-        targetCity={smartTargetCity}
-        setTargetCity={setSmartTargetCity}
+        originCities={smartOriginCities}
+        setOriginCities={setSmartOriginCities}
         availableOrders={availableOrders}
         onApply={(orderIds, recommendedLength, recommendedModels, recommendedCapacity) => {
           // 1. 勾选推荐订单
@@ -1132,8 +1132,8 @@ export default function LtlDispatchWorkspace() {
 
 
 // ==========================================================================
-// 智能拼货推荐弹窗组件
-// 调用 trpc.order.recommendLtlConsolidation 获取推荐组合，用户选择后回调 onApply
+// 智能拼货推荐弹窗组件 v2
+// 混拼模式：跨城市贪心装箱 + 发出城市多选 + 剩余空间补货 + 装载率颜色预警 + 参数记忆
 // ==========================================================================
 const VEHICLE_LENGTH_DEFAULT_CAPACITY: Record<string, number> = {
   "4.2米": 5,
@@ -1144,18 +1144,34 @@ const VEHICLE_LENGTH_DEFAULT_CAPACITY: Record<string, number> = {
   "17.5米": 35,
 };
 
+// ★ 装载率颜色预警体系
+function getFillRateColor(rate: number): string {
+  if (rate >= 90) return "text-green-700";
+  if (rate >= 70) return "text-blue-700";
+  if (rate >= 50) return "text-orange-700";
+  return "text-red-700";
+}
+function getFillRateBg(rate: number): string {
+  if (rate >= 90) return "bg-green-50";
+  if (rate >= 70) return "bg-blue-50";
+  if (rate >= 50) return "bg-orange-50";
+  return "bg-red-50";
+}
+
+// ★ 参数记忆 key
+const SMART_PARAMS_KEY = "smart_consolidate_params";
+
 interface SmartConsolidateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vehicleLength: string;
   setVehicleLength: (v: string) => void;
-  /** 运力柔性：车型为多选，空数组表示不限 */
   vehicleModels: string[];
   setVehicleModels: (v: string[]) => void;
   capacity: string;
   setCapacity: (v: string) => void;
-  targetCity: string;
-  setTargetCity: (v: string) => void;
+  originCities: string[];
+  setOriginCities: (v: string[]) => void;
   availableOrders: any[];
   onApply: (orderIds: number[], vehicleLength: string, vehicleModels: string[], capacity: number) => void;
 }
@@ -1166,30 +1182,53 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
     vehicleLength, setVehicleLength,
     vehicleModels, setVehicleModels,
     capacity, setCapacity,
-    targetCity, setTargetCity,
+    originCities, setOriginCities,
     availableOrders, onApply,
   } = props;
 
   const capacityNum = Number(capacity);
   const canQuery = open && capacityNum > 0;
 
-  // 收集候选目的站列表（来自当前可派订单）
-  const candidateCities = useMemo(() => {
+  // ★ 参数记忆：打开弹窗时从 sessionStorage 恢复
+  useEffect(() => {
+    if (!open) return;
+    try {
+      const saved = sessionStorage.getItem(SMART_PARAMS_KEY);
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (p.vehicleLength && !vehicleLength) setVehicleLength(p.vehicleLength);
+        if (p.capacity && (!capacity || capacity === "0")) setCapacity(p.capacity);
+        if (p.vehicleModels?.length > 0 && vehicleModels.length === 0) setVehicleModels(p.vehicleModels);
+      }
+    } catch { /* ignore */ }
+  }, [open]);
+
+  // ★ 参数记忆：参数变化时保存
+  useEffect(() => {
+    if (!open) return;
+    try {
+      sessionStorage.setItem(SMART_PARAMS_KEY, JSON.stringify({
+        vehicleLength, capacity, vehicleModels,
+      }));
+    } catch { /* ignore */ }
+  }, [vehicleLength, capacity, vehicleModels, open]);
+
+  // ★ 收集候选发出城市列表（替代原目的站列表）
+  const candidateOriginCities = useMemo(() => {
     const set = new Set<string>();
     (availableOrders || []).forEach((o: any) => {
-      if (o.destinationCity) set.add(String(o.destinationCity));
+      if (o.originCity) set.add(String(o.originCity));
     });
     return Array.from(set).sort();
   }, [availableOrders]);
 
-  // 调用智能拼货推荐接口
+  // 调用智能拼货推荐接口 v2
   const { data: recoData, isLoading, refetch } = trpc.order.recommendLtlConsolidation.useQuery(
     {
       capacity: capacityNum,
       vehicleLength: vehicleLength || undefined,
       vehicleModels: vehicleModels.length > 0 ? vehicleModels : undefined,
-      targetDestinationCity: targetCity || undefined,
-      maxRecommendations: 5,
+      targetOriginCities: originCities.length > 0 ? originCities : undefined,
       fillRateMin: 0.3,
     },
     { enabled: canQuery }
@@ -1204,6 +1243,18 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
     }
   };
 
+  // ★ 发出城市多选切换
+  const toggleOriginCity = (city: string) => {
+    setOriginCities(
+      originCities.includes(city)
+        ? originCities.filter(c => c !== city)
+        : [...originCities, city]
+    );
+  };
+
+  const rec = recoData?.recommendation;
+  const remaining = recoData?.remainingCandidates ?? [];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
@@ -1216,7 +1267,7 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
 
         <div className="space-y-4">
           {/* 输入车型与载重 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <div>
               <Label className="text-xs">车长</Label>
               <Select value={vehicleLength} onValueChange={handleLengthChange}>
@@ -1234,7 +1285,7 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
               </Select>
             </div>
             <div>
-              <Label className="text-xs">车型（可多选，任一匹配即可）</Label>
+              <Label className="text-xs">车型（可多选）</Label>
               <ToggleGroup
                 type="multiple"
                 value={vehicleModels}
@@ -1260,25 +1311,45 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
                 className="h-9 mt-1"
               />
             </div>
-            <div>
-              <Label className="text-xs">目的站(可选)</Label>
-              <Select value={targetCity || "__all__"} onValueChange={(v) => setTargetCity(v === "__all__" ? "" : v)}>
-                <SelectTrigger className="h-9 mt-1">
-                  <SelectValue placeholder="所有目的站" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">所有目的站</SelectItem>
-                  {candidateCities.map(c => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          </div>
+
+          {/* ★ 发出城市多选（替代原目的站单选） */}
+          <div>
+            <Label className="text-xs">发出城市（多选，留空 = 全部）</Label>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {candidateOriginCities.map(city => (
+                <Badge
+                  key={city}
+                  variant={originCities.includes(city) ? "default" : "outline"}
+                  className={`cursor-pointer select-none transition-colors ${
+                    originCities.includes(city)
+                      ? "bg-violet-600 hover:bg-violet-700"
+                      : "hover:bg-violet-50 hover:border-violet-300"
+                  }`}
+                  onClick={() => toggleOriginCity(city)}
+                >
+                  {city}
+                </Badge>
+              ))}
+              {originCities.length > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="cursor-pointer select-none hover:bg-destructive/10"
+                  onClick={() => setOriginCities([])}
+                >
+                  <X className="h-3 w-3 mr-0.5" />
+                  清空
+                </Badge>
+              )}
+              {candidateOriginCities.length === 0 && (
+                <span className="text-xs text-muted-foreground">暂无发出城市数据</span>
+              )}
             </div>
           </div>
 
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              算法：按目的站分组 → 加急优先 + 重量降序贪心装箱，装载率不低于 30%
+              算法：跨城市混拼 → 加急优先 + 重量降序贪心装箱，装到接近载重上限
             </p>
             <Button
               size="sm"
@@ -1303,82 +1374,140 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
               智能计算中…
             </div>
           )}
-          {canQuery && !isLoading && recoData && (
+          {canQuery && !isLoading && recoData && !rec && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              暂无满足装载率 30% 的拼货组合。可以尝试调小载重，或调整发出城市筛选。
+            </div>
+          )}
+          {canQuery && !isLoading && recoData && rec && (
             <div className="space-y-3">
               <div className="text-xs text-muted-foreground">
-                共扫描 <b>{recoData.totalCandidates}</b> 个待派订单，给出 <b className="text-violet-700">{recoData.recommendations.length}</b> 个推荐组合（按综合评分降序）：
+                共扫描 <b>{recoData.totalCandidates}</b> 个待派订单，推荐最优组合：
               </div>
-              {recoData.recommendations.length === 0 && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                  暂无满足装载率 30% 的拼货组合。可以尝试调小载重，或选择具体目的站。
-                </div>
-              )}
-              {recoData.recommendations.map((rec: any, idx: number) => (
-                <Card key={idx} className="border-violet-100">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-violet-600">推荐 #{idx + 1}</Badge>
-                        <span className="font-medium text-sm">
-                          目的站：{rec.destinationCity}
-                          {rec.destinationProvince && <span className="text-muted-foreground"> · {rec.destinationProvince}</span>}
-                        </span>
-                      </div>
-                      <Button
-                        size="sm"
-                        className="bg-violet-600 hover:bg-violet-700"
-                        onClick={() => {
-                          const ids = rec.orders.map((o: any) => o.id);
-                          onApply(ids, vehicleLength, vehicleModels, capacityNum);
-                        }}
-                      >
-                        <Truck className="h-3.5 w-3.5 mr-1" />
-                        应用此组合
-                      </Button>
+
+              {/* ★ 单个最优组合卡片 */}
+              <Card className="border-violet-200 shadow-sm">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-violet-600">推荐组合</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        覆盖 {Object.keys(rec.destBreakdown || {}).length} 个目的站
+                      </span>
                     </div>
-                  </CardHeader>
-                  <CardContent className="pt-0">
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs mb-2">
-                      <div className="rounded bg-slate-50 px-2 py-1">
-                        <div className="text-muted-foreground">单数</div>
-                        <div className="font-bold">{rec.orderCount}</div>
-                      </div>
-                      <div className="rounded bg-orange-50 px-2 py-1">
-                        <div className="text-muted-foreground">总吨位</div>
-                        <div className="font-bold text-orange-700">{rec.totalWeight} 吨</div>
-                      </div>
-                      <div className="rounded bg-green-50 px-2 py-1">
-                        <div className="text-muted-foreground">装载率</div>
-                        <div className="font-bold text-green-700">{rec.fillRate}%</div>
-                      </div>
-                      <div className="rounded bg-red-50 px-2 py-1">
-                        <div className="text-muted-foreground">加急</div>
-                        <div className="font-bold text-red-700">{rec.urgentCount}</div>
-                      </div>
-                      <div className="rounded bg-blue-50 px-2 py-1">
-                        <div className="text-muted-foreground">总运费</div>
-                        <div className="font-bold text-blue-700">¥{rec.totalRevenue}</div>
-                      </div>
+                    <Button
+                      size="sm"
+                      className="bg-violet-600 hover:bg-violet-700"
+                      onClick={() => {
+                        const ids = rec.orders.map((o: any) => o.id);
+                        onApply(ids, vehicleLength, vehicleModels, capacityNum);
+                      }}
+                    >
+                      <Truck className="h-3.5 w-3.5 mr-1" />
+                      应用此组合
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-3">
+                  {/* 统计指标 */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                    <div className="rounded bg-slate-50 px-2 py-1">
+                      <div className="text-muted-foreground">单数</div>
+                      <div className="font-bold">{rec.orderCount}</div>
                     </div>
-                    <div className="text-xs text-muted-foreground border-t pt-2">
-                      <span className="font-medium">订单明细：</span>
-                      <div className="mt-1 max-h-32 overflow-y-auto space-y-1">
-                        {rec.orders.map((o: any) => (
-                          <div key={o.id} className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-slate-50">
-                            <span className="truncate">
-                              {o.isUrgent && <Badge variant="destructive" className="mr-1 text-[10px] h-4 px-1">急</Badge>}
-                              <span className="font-mono">{o.orderNumber}</span>
-                              <span className="text-muted-foreground"> · {o.customerName}</span>
-                              <span className="text-muted-foreground"> · {o.cargoName}</span>
-                            </span>
-                            <span className="font-medium text-orange-700 whitespace-nowrap">{o.weight} 吨</span>
-                          </div>
+                    <div className="rounded bg-orange-50 px-2 py-1">
+                      <div className="text-muted-foreground">总吨位</div>
+                      <div className="font-bold text-orange-700">{rec.totalWeight} 吨</div>
+                    </div>
+                    <div className={`rounded px-2 py-1 ${getFillRateBg(rec.fillRate)}`}>
+                      <div className="text-muted-foreground">装载率</div>
+                      <div className={`font-bold ${getFillRateColor(rec.fillRate)}`}>{rec.fillRate}%</div>
+                    </div>
+                    <div className="rounded bg-red-50 px-2 py-1">
+                      <div className="text-muted-foreground">加急</div>
+                      <div className="font-bold text-red-700">{rec.urgentCount}</div>
+                    </div>
+                    <div className="rounded bg-blue-50 px-2 py-1">
+                      <div className="text-muted-foreground">总运费</div>
+                      <div className="font-bold text-blue-700">¥{rec.totalRevenue}</div>
+                    </div>
+                  </div>
+
+                  {/* ★ 目的站分布 */}
+                  {rec.destBreakdown && Object.keys(rec.destBreakdown).length > 1 && (
+                    <div className="text-xs">
+                      <span className="font-medium text-muted-foreground">目的站分布：</span>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {Object.entries(rec.destBreakdown).map(([city, info]: [string, any]) => (
+                          <Badge key={city} variant="outline" className="text-[10px] font-normal">
+                            {city} {info.count}票 / {info.weight}吨
+                          </Badge>
                         ))}
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
+                  )}
+
+                  {/* 订单明细 */}
+                  <div className="text-xs text-muted-foreground border-t pt-2">
+                    <span className="font-medium">订单明细：</span>
+                    <div className="mt-1 max-h-40 overflow-y-auto space-y-1">
+                      {rec.orders.map((o: any) => (
+                        <div key={o.id} className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-slate-50">
+                          <span className="truncate">
+                            {o.isUrgent && <Badge variant="destructive" className="mr-1 text-[10px] h-4 px-1">急</Badge>}
+                            <span className="font-mono">{o.orderNumber}</span>
+                            <span className="text-muted-foreground"> · {o.customerName}</span>
+                            <span className="text-muted-foreground"> · {o.cargoName}</span>
+                            <Badge variant="outline" className="ml-1 text-[10px] h-4 px-1">→ {o.destinationCity}</Badge>
+                          </span>
+                          <span className="font-medium text-orange-700 whitespace-nowrap">{o.weight} 吨</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* ★ 剩余空间 + 补货建议 */}
+                  {rec.remainingSpace > 0.01 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs">
+                      <div className="flex items-center gap-1.5 font-medium text-amber-700 mb-1">
+                        <Package className="h-3.5 w-3.5" />
+                        剩余 {rec.remainingSpace.toFixed(1)} 吨可装
+                      </div>
+                      {remaining.length > 0 ? (
+                        <div className="space-y-1">
+                          <span className="text-muted-foreground">可追加的候选订单（点击追加）：</span>
+                          <div className="mt-1 max-h-24 overflow-y-auto space-y-1">
+                            {remaining.map((o: any) => (
+                              <div
+                                key={o.id}
+                                className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-white hover:bg-violet-50 cursor-pointer transition-colors border border-transparent hover:border-violet-200"
+                                onClick={() => {
+                                  // 追加订单：将当前推荐 + 这个订单一起应用
+                                  const currentIds = rec.orders.map((x: any) => x.id);
+                                  onApply([...currentIds, o.id], vehicleLength, vehicleModels, capacityNum);
+                                }}
+                              >
+                                <span className="truncate">
+                                  {o.isUrgent && <Badge variant="destructive" className="mr-1 text-[10px] h-4 px-1">急</Badge>}
+                                  <span className="font-mono">{o.orderNumber}</span>
+                                  <span className="text-muted-foreground"> · {o.customerName}</span>
+                                  <Badge variant="outline" className="ml-1 text-[10px] h-4 px-1">→ {o.destinationCity}</Badge>
+                                </span>
+                                <div className="flex items-center gap-1.5 whitespace-nowrap">
+                                  <span className="font-medium text-orange-700">{o.weight} 吨</span>
+                                  <Plus className="h-3 w-3 text-violet-600" />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">暂无可追加的候选订单（剩余单票均超过剩余空间）</span>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           )}
         </div>
@@ -1392,4 +1521,4 @@ function SmartConsolidateDialog(props: SmartConsolidateDialogProps) {
     </Dialog>
   );
 }
-// build-$(date +%s)
+// build-smart-v2
