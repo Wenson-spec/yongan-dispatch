@@ -4292,23 +4292,37 @@ export const orderRouter = router({
     return { batch, orders: enrichedOrders };
   }),
   // ============================================================
-  // 智能拼货推荐 v2：混拼模式（跨城市贪心装箱）+ 发出城市多选筛选
-  // 算法：全量候选 -> 加急优先+重量降序贪心装箱 -> 装满一车 -> 返回剩余可追加候选
+  // 智能拼货推荐：兼容 v1（按目的站分组）和 v2（混拼模式）
+  // v1 参数：targetDestinationCity + maxRecommendations → 按目的站分组，返回 recommendations[]
+  // v2 参数：targetOriginCities → 混拼模式，返回 recommendation + remainingCandidates
+  // 自动检测：如果传了 targetOriginCities 或 consolidationMode=="cross_city" 则走 v2，否则走 v1
   // ============================================================
   recommendLtlConsolidation: permissionProcedure(PERMISSIONS.LTL_ARRANGE_SHIP).input(
     z.object({
-      capacity: z.number().min(0.1, "载重必须大于0"),                    // 车辆载重（吨）
-      vehicleLength: z.string().optional(),                                // 车长（仅作回显）
-      vehicleModels: z.array(z.string()).optional(),                       // 车型（多选，OR 匹配）
-      targetOriginCities: z.array(z.string()).optional(),                   // ★ 发出城市多选，OR 匹配
-      candidateOrderIds: z.array(z.number()).optional(),                   // 限定候选范围
-      fillRateMin: z.number().min(0).max(1).default(0.3),                  // 装载率下限
+      capacity: z.number().min(0.1, "载重必须大于0"),
+      vehicleLength: z.string().optional(),
+      vehicleModels: z.array(z.string()).optional(),
+      // v1 旧参数（主应用兼容）
+      targetDestinationCity: z.string().optional(),
+      maxRecommendations: z.number().min(1).max(10).default(5),
+      // v2 新参数（/ltl/ 独立工作台）
+      targetOriginCities: z.array(z.string()).optional(),
+      consolidationMode: z.enum(["by_destination", "cross_city"]).optional(),
+      // 共用
+      candidateOrderIds: z.array(z.number()).optional(),
+      fillRateMin: z.number().min(0).max(1).default(0.3),
     }),
   ).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return { recommendation: null, remainingCandidates: [], totalCandidates: 0, capacity: input.capacity };
+    // 判断走 v2 还是 v1
+    const useV2 = input.consolidationMode === "cross_city" || (input.targetOriginCities && input.targetOriginCities.length > 0) || (!input.targetDestinationCity && !input.consolidationMode);
 
-    // 1. 加载候选订单：状态为 inquiry_confirmed，且未关联到任何派车批次
+    if (!db) {
+      if (useV2) return { recommendation: null, remainingCandidates: [], totalCandidates: 0, capacity: input.capacity };
+      return { recommendations: [], totalCandidates: 0, capacity: input.capacity };
+    }
+
+    // 1. 加载候选订单：状态为 inquiry_confirmed
     const baseConditions: any[] = [
       eq(orders.businessType, "ltl"),
       eq(orders.status, "inquiry_confirmed"),
@@ -4316,9 +4330,13 @@ export const orderRouter = router({
     if (input.candidateOrderIds && input.candidateOrderIds.length > 0) {
       baseConditions.push(inArray(orders.id, input.candidateOrderIds));
     }
-    // ★ 发出城市多选筛选（替代原 targetDestinationCity 单选）
-    if (input.targetOriginCities && input.targetOriginCities.length > 0) {
+    // v2: 发出城市多选
+    if (useV2 && input.targetOriginCities && input.targetOriginCities.length > 0) {
       baseConditions.push(inArray(orders.originCity, input.targetOriginCities));
+    }
+    // v1: 目的站单选
+    if (!useV2 && input.targetDestinationCity) {
+      baseConditions.push(eq(orders.destinationCity, input.targetDestinationCity));
     }
     const candidates = await db.select().from(orders).where(and(...baseConditions));
 
@@ -4333,10 +4351,11 @@ export const orderRouter = router({
     const available = candidates.filter((o: any) => !dispatchedSet.has(Number(o.id)));
 
     if (available.length === 0) {
-      return { recommendation: null, remainingCandidates: [], totalCandidates: 0, capacity: input.capacity };
+      if (useV2) return { recommendation: null, remainingCandidates: [], totalCandidates: 0, capacity: input.capacity };
+      return { recommendations: [], totalCandidates: 0, capacity: input.capacity };
     }
 
-    // 2. 解析每个订单的吨位（兼容字符串/数字）
+    // 2. 解析每个订单的吨位
     const enriched = available.map((o: any) => {
       const w = resolveWeightInTons(o.weight);
       return {
@@ -4352,66 +4371,107 @@ export const orderRouter = router({
         isUrgent: Boolean(o.isUrgent),
         customerPrice: o.customerPrice ? Number(o.customerPrice) : 0,
       };
-    }).filter((o: any) => o.weight > 0); // 没有吨位的不参与拼货
+    }).filter((o: any) => o.weight > 0);
 
-    // 3. ★ 混拼模式：全量候选不按目的站分组，加急优先 + 重量降序贪心装箱
-    const sorted = [...enriched].sort((a, b) => {
-      if (a.isUrgent !== b.isUrgent) return a.isUrgent ? -1 : 1;
-      return (b.weight || 0) - (a.weight || 0);
-    });
-    const picked: any[] = [];
-    let used = 0;
-    const notPicked: any[] = [];
-    for (const o of sorted) {
-      if (used + o.weight <= input.capacity + 0.001) {
-        picked.push(o);
-        used += o.weight;
-      } else {
-        notPicked.push(o);
+    // ========== v2 混拼模式 ==========
+    if (useV2) {
+      const sorted = [...enriched].sort((a, b) => {
+        if (a.isUrgent !== b.isUrgent) return a.isUrgent ? -1 : 1;
+        return (b.weight || 0) - (a.weight || 0);
+      });
+      const picked: any[] = [];
+      let used = 0;
+      const notPicked: any[] = [];
+      for (const o of sorted) {
+        if (used + o.weight <= input.capacity + 0.001) {
+          picked.push(o);
+          used += o.weight;
+        } else {
+          notPicked.push(o);
+        }
       }
+      if (picked.length === 0) {
+        return { recommendation: null, remainingCandidates: [], totalCandidates: enriched.length, capacity: input.capacity };
+      }
+      const fillRate = used / input.capacity;
+      if (fillRate < input.fillRateMin) {
+        return { recommendation: null, remainingCandidates: [], totalCandidates: enriched.length, capacity: input.capacity };
+      }
+      const destBreakdown: Record<string, { count: number; weight: number }> = {};
+      for (const o of picked) {
+        const key = o.destinationCity;
+        if (!destBreakdown[key]) destBreakdown[key] = { count: 0, weight: 0 };
+        destBreakdown[key].count += 1;
+        destBreakdown[key].weight = Number((destBreakdown[key].weight + o.weight).toFixed(3));
+      }
+      const urgentCount = picked.filter((o: any) => o.isUrgent).length;
+      const totalRevenue = picked.reduce((s: number, o: any) => s + (o.customerPrice || 0), 0);
+      const remainingSpace = input.capacity - used;
+      const remainingCandidates = notPicked
+        .filter((o: any) => o.weight <= remainingSpace + 0.001)
+        .sort((a: any, b: any) => (b.weight || 0) - (a.weight || 0))
+        .slice(0, 10);
+      return {
+        recommendation: {
+          orderCount: picked.length,
+          totalWeight: Number(used.toFixed(3)),
+          fillRate: Number((fillRate * 100).toFixed(1)),
+          remainingSpace: Number(remainingSpace.toFixed(3)),
+          urgentCount,
+          totalRevenue: Number(totalRevenue.toFixed(2)),
+          destBreakdown,
+          orders: picked,
+        },
+        remainingCandidates,
+        totalCandidates: enriched.length,
+        capacity: input.capacity,
+        vehicleLength: input.vehicleLength || null,
+        vehicleModels: input.vehicleModels && input.vehicleModels.length > 0 ? input.vehicleModels : null,
+      };
     }
 
-    if (picked.length === 0) {
-      return { recommendation: null, remainingCandidates: [], totalCandidates: enriched.length, capacity: input.capacity };
-    }
-
-    const fillRate = used / input.capacity;
-    if (fillRate < input.fillRateMin) {
-      return { recommendation: null, remainingCandidates: [], totalCandidates: enriched.length, capacity: input.capacity };
-    }
-
-    // 4. 统计目的站分布
-    const destBreakdown: Record<string, { count: number; weight: number }> = {};
-    for (const o of picked) {
+    // ========== v1 按目的站分组模式（主应用兼容） ==========
+    const byDest = new Map<string, typeof enriched>();
+    for (const o of enriched) {
       const key = o.destinationCity;
-      if (!destBreakdown[key]) destBreakdown[key] = { count: 0, weight: 0 };
-      destBreakdown[key].count += 1;
-      destBreakdown[key].weight = Number((destBreakdown[key].weight + o.weight).toFixed(3));
+      if (!byDest.has(key)) byDest.set(key, []);
+      byDest.get(key)!.push(o);
     }
-
-    const urgentCount = picked.filter((o: any) => o.isUrgent).length;
-    const totalRevenue = picked.reduce((s: number, o: any) => s + (o.customerPrice || 0), 0);
-
-    // 5. ★ 剩余可追加候选：未被选入且单票重量 ≤ 剩余空间，按重量降序取前 10
-    const remainingSpace = input.capacity - used;
-    const remainingCandidates = notPicked
-      .filter((o: any) => o.weight <= remainingSpace + 0.001)
-      .sort((a: any, b: any) => (b.weight || 0) - (a.weight || 0))
-      .slice(0, 10);
-
-    // 6. 返回单个最优组合 + 剩余候选
-    return {
-      recommendation: {
+    const recommendations: any[] = [];
+    for (const [destCity, list] of byDest.entries()) {
+      const sorted = [...list].sort((a, b) => {
+        if (a.isUrgent !== b.isUrgent) return a.isUrgent ? -1 : 1;
+        return (b.weight || 0) - (a.weight || 0);
+      });
+      const picked: any[] = [];
+      let used = 0;
+      for (const o of sorted) {
+        if (used + o.weight <= input.capacity + 0.001) {
+          picked.push(o);
+          used += o.weight;
+        }
+      }
+      if (picked.length === 0) continue;
+      const fillRate = used / input.capacity;
+      if (fillRate < (input.fillRateMin || 0.5)) continue;
+      const urgentCount = picked.filter(o => o.isUrgent).length;
+      const totalRevenue = picked.reduce((s, o) => s + (o.customerPrice || 0), 0);
+      const score = fillRate * 0.6 + Math.min(urgentCount / Math.max(picked.length, 1), 1) * 0.3 + Math.min(picked.length / 10, 1) * 0.1;
+      recommendations.push({
+        destinationCity: destCity,
+        destinationProvince: picked[0]?.destinationProvince || null,
         orderCount: picked.length,
         totalWeight: Number(used.toFixed(3)),
         fillRate: Number((fillRate * 100).toFixed(1)),
-        remainingSpace: Number(remainingSpace.toFixed(3)),
         urgentCount,
         totalRevenue: Number(totalRevenue.toFixed(2)),
-        destBreakdown,
+        score: Number(score.toFixed(4)),
         orders: picked,
-      },
-      remainingCandidates,
+      });
+    }
+    recommendations.sort((a, b) => b.score - a.score);
+    return {
+      recommendations: recommendations.slice(0, input.maxRecommendations),
       totalCandidates: enriched.length,
       capacity: input.capacity,
       vehicleLength: input.vehicleLength || null,
