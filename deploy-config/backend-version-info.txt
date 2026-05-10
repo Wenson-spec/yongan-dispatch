@@ -1,0 +1,19 @@
+Backend index.js Version Info
+=============================
+Date: 2026-05-11
+Source: GitHub commit 52b4c99 (feat(ltl): 零担派车台全面改造 - 双层分组+智能派车+Sticky统计栏 [bundle v19])
+
+File details:
+667443 /var/www/yongan/dist/index.js
+85efef8f6dc79db42b99cc8a59f5b587  /var/www/yongan/dist/index.js
+5
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+
+
+Key features present:
+- 并行化改造 (待询价跟调度派车并行): YES (5 occurrences)
+- frequent_cities (车辆常驻城市): YES
+- recommendLtlVehicles (智能推荐车辆): YES
+- v19 ltl bundle: YES
