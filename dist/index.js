@@ -180,10 +180,8 @@ var init_schema = __esm({
       // 车长：4.2米/6.8米/7.6米/9.6米/13米/17.5米
       vehicleModel: varchar("vehicleModel", { length: 20 }),
       // 车型：高栏/平板/厢式/飞翼
-      standardCapacity: decimal("standardCapacity", { precision: 10, scale: 2 }),
+      standardCapacity: decimal("standardCapacity", { precision: 10, scale: 2 })
       // 标准载重吨位
-      frequentCities: json("frequent_cities")
-      // 常驻发出城市权重 {"宜春":0.75,"南昌":0.25}
     });
     drivers = mysqlTable("drivers", {
       id: int("id").autoincrement().primaryKey(),
@@ -423,6 +421,7 @@ var init_schema = __esm({
       relatedParentIds: json("relatedParentIds"),
       subchainStage: mysqlEnum("subchainStage", ["pickup", "delivery"]),
       ltlSegmentMode: varchar("ltlSegmentMode", { length: 50 }),
+      ltlPickupOutsourced: boolean("ltlPickupOutsourced"),
       isMerged: boolean("isMerged").default(false),
       // 是否为合并主订单
       // 其他备注
@@ -558,8 +557,6 @@ var init_schema = __esm({
       vehicleLength: varchar("vehicleLength", { length: 20 }),
       vehicleModel: varchar("vehicleModel", { length: 20 }),
       capacity: decimal("capacity", { precision: 10, scale: 2 }),
-      departureCity: varchar("departure_city", { length: 100 }),
-      // 该批次实际发出城市
       createdBy: int("createdBy"),
       createdByName: varchar("createdByName", { length: 100 }),
       createdAt: timestamp("createdAt").defaultNow().notNull()
@@ -1342,44 +1339,6 @@ async function getRecentlyUsedVehicles(limit = 5) {
     });
   }
   return results;
-}
-// 重算指定车辆过30天常驻发出城市权重
-async function recomputeVehicleFrequentCities(plateNumber) {
-  const db = await getDb();
-  if (!db) return;
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1e3);
-  const rows = await db.execute(sql`
-    SELECT departure_city as city, COUNT(*) c
-    FROM ltl_dispatch_batches
-    WHERE plateNumber = ${plateNumber}
-      AND departure_city IS NOT NULL AND departure_city <> ''
-      AND dispatchDate >= ${thirtyDaysAgo}
-    GROUP BY departure_city
-  `);
-  const list = rows[0] || [];
-  if (list.length === 0) {
-    await db.update(vehicles).set({ frequentCities: null }).where(eq(vehicles.plateNumber, plateNumber));
-    return;
-  }
-  const total = list.reduce((s, r) => s + Number(r.c), 0);
-  const freq = {};
-  for (const r of list) {
-    if (!r.city) continue;
-    freq[r.city] = Math.round(Number(r.c) / total * 1e4) / 1e4;
-  }
-  await db.update(vehicles).set({ frequentCities: freq }).where(eq(vehicles.plateNumber, plateNumber));
-}
-async function recomputeAllFrequentCities() {
-  const db = await getDb();
-  if (!db) return;
-  const plates = await db.execute(sql`
-    SELECT DISTINCT plateNumber FROM ltl_dispatch_batches
-    WHERE dispatchDate >= (NOW() - INTERVAL 30 DAY)
-  `);
-  const list = plates[0] || [];
-  for (const p of list) {
-    if (p.plateNumber) await recomputeVehicleFrequentCities(p.plateNumber);
-  }
 }
 async function findDriverByPlate(plateNumber) {
   const db = await getDb();
@@ -4811,7 +4770,7 @@ var DELETE_ALLOWED_STATUSES = [
   "pending_inquiry",
   "on_hold"
 ];
-var LTL_BATCH_RELEASEABLE_STATUSES = /* @__PURE__ */ new Set(["inquiry_confirmed", "shipped", "dispatched", "pending_inquiry"]);
+var LTL_BATCH_RELEASEABLE_STATUSES = /* @__PURE__ */ new Set(["inquiry_confirmed", "shipped", "dispatched"]);
 var ORDER_CONCURRENT_CHANGE_MESSAGE = "\u8BA2\u5355\u5DF2\u88AB\u5176\u4ED6\u4EBA\u5904\u7406\u6216\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\u3002";
 var LTL_BATCH_CONCURRENT_CHANGE_MESSAGE = "\u96F6\u62C5\u6279\u6B21\u5DF2\u88AB\u5176\u4ED6\u4EBA\u4FEE\u6539\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\u3002";
 function getMutationAffectedCount(result) {
@@ -5666,29 +5625,7 @@ var orderRouter = router({
       conditions.push(eq2(orders.businessType, input.businessType));
     }
     if (input.status) {
-      // 【并行化改造】零担工作台询价/派车并行支持
-      console.log("[DBG-PARALLEL] list called businessType=", input.businessType, "status=", input.status, "user=", ctx?.user?.id, "role=", ctx?.user?.role); if (input.businessType === "ltl" && input.status === "pending_inquiry") {
-        // 待询价Tab：原始pending_inquiry + 已派车但未询价(ltlInquiryStatus=pending)
-        conditions.push(
-          or(
-            eq2(orders.status, "pending_inquiry"),
-            and2(
-              eq2(orders.ltlInquiryStatus, "pending"),
-              inArray2(orders.status, ["dispatched", "shipped", "in_transit", "partial_delivered", "delivered"])
-            )
-          )
-        );
-      } else if (input.businessType === "ltl" && input.status === "inquiry_confirmed") {
-        // 调度派车候选：已询价 + 待询价（让待询价订单也能直接派车）
-        conditions.push(
-          or(
-            eq2(orders.status, "inquiry_confirmed"),
-            eq2(orders.status, "pending_inquiry")
-          )
-        );
-      } else {
-        conditions.push(eq2(orders.status, input.status));
-      }
+      conditions.push(eq2(orders.status, input.status));
     }
     if (input.isUrgent !== void 0) {
       conditions.push(eq2(orders.isUrgent, input.isUrgent));
@@ -6238,7 +6175,7 @@ var orderRouter = router({
       pending_vehicle: ["dispatched", "pending_approval", "on_hold", "cancelled", "pending_price"],
       pending_dispatch: ["dispatched", "on_hold", "cancelled", "pending_price"],
       pending_approval: ["dispatched", "pending_vehicle", "on_hold", "cancelled"],
-      pending_inquiry: ["inquiry_confirmed", "dispatched", "shipped", "on_hold", "cancelled", "pending_price"],
+      pending_inquiry: ["inquiry_confirmed", "on_hold", "cancelled", "pending_price"],
       inquiry_confirmed: ["shipped", "dispatched", "partial_delivered", "delivered", "on_hold", "cancelled", "pending_inquiry"],
       shipped: ["partial_delivered", "delivered", "on_hold", "cancelled", "inquiry_confirmed"],
       dispatched: ["shipped", "in_transit", "partial_delivered", "delivered", "on_hold", "cancelled", "pending_vehicle", "pending_dispatch"],
@@ -6288,56 +6225,6 @@ var orderRouter = router({
         code: "BAD_REQUEST",
         message: `\u7EC8\u6001\u8BA2\u5355\u201C${STATUS_LABELS2[currentStatus] || currentStatus}\u201D\u4E0D\u5141\u8BB8\u518D\u4FEE\u6539\u72B6\u6001\uFF0C\u5982\u9700\u8C03\u6574\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458\u3002`
       });
-    }
-    // 【并行化改造】已派车订单补询价：当nextStatus=inquiry_confirmed但当前状态已进入派车后阶段，
-    // 仅更新询价字段与ltlInquiryStatus=confirmed，不回退主状态。
-    const isLtlParallelInquiryConfirm = nextStatus === "inquiry_confirmed"
-      && String(currentOrderFull.businessType || "") === "ltl"
-      && ["dispatched", "shipped", "in_transit", "partial_delivered", "delivered"].includes(currentStatus);
-    if (isLtlParallelInquiryConfirm) {
-      const inquiryUpdate = { ltlInquiryStatus: "confirmed" };
-      for (const [key, value] of Object.entries(extra)) {
-        if (value !== void 0) inquiryUpdate[key] = value;
-      }
-      if (inquiryUpdate.ltlUnitPrice) {
-        const row = await db.select().from(orders).where(eq2(orders.id, id)).limit(1);
-        if (row[0]) {
-          const unitPrice = safeParseFloat(inquiryUpdate.ltlUnitPrice);
-          const weight = safeParseFloat(row[0].weight);
-          const freight = Math.round(unitPrice * weight * 100) / 100;
-          inquiryUpdate.actualFreight = String(freight);
-          const deliveryFee = safeParseFloat(inquiryUpdate.ltlDeliveryFee || row[0].ltlDeliveryFee);
-          const otherFee = safeParseFloat(inquiryUpdate.ltlOtherFee || row[0].ltlOtherFee);
-          inquiryUpdate.totalCost = String(freight + deliveryFee + otherFee);
-        }
-      }
-      const [oldRecord2] = await db.select().from(orders).where(eq2(orders.id, id)).limit(1);
-      const fieldChanges2 = oldRecord2 ? trackFieldChanges(oldRecord2, inquiryUpdate) : [];
-      await db.update(orders).set(inquiryUpdate).where(eq2(orders.id, id));
-      if (inquiryUpdate.freightStationName) {
-        try {
-          const existingStation = await dbHelpers.findFreightStationByName(inquiryUpdate.freightStationName);
-          if (!existingStation) {
-            await dbHelpers.createFreightStation({
-              name: inquiryUpdate.freightStationName,
-              phone: inquiryUpdate.inquiryPhone || void 0,
-              isActive: true
-            });
-          }
-        } catch (e) {
-          console.error("Auto-save freight station failed:", e);
-        }
-      }
-      await createOperationLog({
-        userId: ctx.user.id,
-        userName: ctx.user.name || ctx.user.username || void 0,
-        action: "inquiry_supplement",
-        targetType: "order",
-        targetId: String(id),
-        changes: fieldChanges2.length > 0 ? { fieldChanges: fieldChanges2, rawUpdate: inquiryUpdate } : inquiryUpdate,
-        description: `订单 #${id} 已派车补询价完成，主状态保持 ${currentStatus}`
-      });
-      return { success: true };
     }
     const allowed = VALID_TRANSITIONS[currentStatus];
     if (allowed && !allowed.includes(nextStatus)) {
@@ -6564,12 +6451,6 @@ var orderRouter = router({
       } catch (e) {
         console.error("Auto-create approval record failed:", e);
       }
-    }
-    if (nextStatus === "inquiry_confirmed" && String(currentOrderFull.businessType || "") === "ltl") {
-      // 【并行化改造】询价确认同步写入 ltlInquiryStatus=confirmed
-      try {
-        await db.update(orders).set({ ltlInquiryStatus: "confirmed" }).where(eq2(orders.id, id));
-      } catch (e) { console.error("sync ltlInquiryStatus failed:", e); }
     }
     if (nextStatus === "inquiry_confirmed" && extra.freightStationName) {
       try {
@@ -7700,7 +7581,8 @@ var orderRouter = router({
       driverIdCard: z5.string().optional(),
       reassignReason: z5.string().optional(),
       ltlCustomerPickup: z5.boolean().optional(),
-      ltlCustomerSelfDeliverConfirmed: z5.boolean().optional()
+      ltlCustomerSelfDeliverConfirmed: z5.boolean().optional(),
+      ltlPickupOutsourced: z5.boolean().optional()
     })
   ).mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -7711,6 +7593,7 @@ var orderRouter = router({
       reassignReason,
       ltlCustomerPickup,
       ltlCustomerSelfDeliverConfirmed,
+      ltlPickupOutsourced,
       ...fields
     } = input;
     const updateData = {};
@@ -7799,6 +7682,21 @@ var orderRouter = router({
         updateData.receivingConfirmedAt = updateData.receivingConfirmedAt ?? /* @__PURE__ */ new Date();
         updateData.receivingConfirmedBy = ctx.user.id;
         updateData.receivingConfirmedByName = ctx.user.name ?? ctx.user.username ?? "\u672A\u77E5";
+      }
+    }
+    if (ltlPickupOutsourced !== void 0) {
+      if (effectiveBusinessType !== "ltl") {
+        throw new TRPCError4({ code: "BAD_REQUEST", message: "\u4EC5\u96F6\u62C5\u8BA2\u5355\u652F\u6301\u524D\u6BB5\u5916\u8BF7\u6807\u8BB0\u3002" });
+      }
+      updateData.ltlPickupOutsourced = ltlPickupOutsourced;
+      if (ltlPickupOutsourced) {
+        const nextRemarksBase = updateData.remarks ?? currentOrder.remarks;
+        updateData.remarks = applyLtlRemarkTag({
+          remarks: nextRemarksBase,
+          tag: "\u3010\u524D\u6BB5\u5DF2\u8F6C\u5916\u8BF7\u3011",
+          enabled: true,
+          operatorName: ctx.user.name ?? ctx.user.username ?? null
+        });
       }
     }
     if (updateData.plateNumber) {
@@ -8114,21 +8012,6 @@ var orderRouter = router({
     const countResult = await db.select({ cnt: count() }).from(ltlDispatchBatches).where(like2(ltlDispatchBatches.batchCode, `${prefix}%`));
     const seq = String((countResult[0]?.cnt ?? 0) + 1).padStart(3, "0");
     const batchCode = `${prefix}${seq}`;
-    // 计算本批次发出城市（取订单中出现最多的 originCity）
-    let batchDepartureCity = null;
-    try {
-      const orderCityRows = await db.select({ originCity: orders.originCity }).from(orders).where(inArray2(orders.id, input.orderIds));
-      const cityCount = /* @__PURE__ */ new Map();
-      for (const r of orderCityRows) {
-        const c = (r.originCity || "").trim();
-        if (!c) continue;
-        cityCount.set(c, (cityCount.get(c) || 0) + 1);
-      }
-      let maxCnt = 0;
-      for (const [city, cnt] of cityCount.entries()) {
-        if (cnt > maxCnt) { maxCnt = cnt; batchDepartureCity = city; }
-      }
-    } catch (e) { console.error("计算发出城市失败", e); }
     const batchResult = await db.insert(ltlDispatchBatches).values({
       batchCode,
       plateNumber: input.plateNumber.trim(),
@@ -8139,7 +8022,6 @@ var orderRouter = router({
       vehicleLength: input.vehicleLength || null,
       vehicleModel: input.vehicleModel || null,
       capacity: input.capacity ? input.capacity : null,
-      departureCity: batchDepartureCity,
       createdBy: ctx.user.id,
       createdByName: ctx.user.name || ctx.user.username || null
     });
@@ -8161,12 +8043,8 @@ var orderRouter = router({
         driverName: input.driverName.trim(),
         driverPhone: input.driverPhone?.trim() || void 0
       };
-      if (currentOrder && ["inquiry_confirmed", "shipped", "pending_inquiry"].includes(currentOrder.status)) {
+      if (currentOrder && ["inquiry_confirmed", "shipped"].includes(currentOrder.status)) {
         updateData.status = "dispatched";
-        // 【并行化改造】如果是从待询价状态直接派车，保留ltlInquiryStatus=pending以便后续补询价
-        if (currentOrder.status === "pending_inquiry" && !currentOrder.ltlInquiryStatus) {
-          updateData.ltlInquiryStatus = "pending";
-        }
         statusUpdatedCount++;
       }
       await db.update(orders).set(updateData).where(eq2(orders.id, orderId));
@@ -8190,14 +8068,10 @@ var orderRouter = router({
       action: "create",
       targetType: "ltl_dispatch_batch",
       targetId: String(batchId),
-      changes: { batchCode, plateNumber: input.plateNumber, driverName: input.driverName, orderCount: input.orderIds.length, statusUpdatedCount, podCreatedCount, departureCity: batchDepartureCity },
+      changes: { batchCode, plateNumber: input.plateNumber, driverName: input.driverName, orderCount: input.orderIds.length, statusUpdatedCount, podCreatedCount },
       description: `\u521B\u5EFA\u96F6\u62C5\u6D3E\u8F66\u6279\u6B21 ${batchCode}\uFF0C\u8F66\u724C ${input.plateNumber}\uFF0C\u53F8\u673A ${input.driverName}\uFF0C${input.orderIds.length} \u4E2A\u8BA2\u5355\uFF0C${statusUpdatedCount} \u4E2A\u81EA\u52A8\u63A8\u8FDB\u4E3A\u5DF2\u53D1\u8FD0`
     });
-    // 重算该车辆过30天的常驻城市权重
-    try {
-      await recomputeVehicleFrequentCities(input.plateNumber.trim());
-    } catch (e) { console.error("重算常驻城市失败", e); }
-    return { batchId, batchCode, statusUpdatedCount, podCreatedCount, departureCity: batchDepartureCity };
+    return { batchId, batchCode, statusUpdatedCount, podCreatedCount };
   }),
   // 查询零担派车批次列表
   listLtlBatches: protectedProcedure.input(
@@ -8254,41 +8128,44 @@ var orderRouter = router({
     return { batch, orders: enrichedOrders };
   }),
   // ============================================================
-  // 智能拼货推荐：根据车型/载重，从待派车订单中推荐最优拼货组合
-  // 算法：按目的站分组 -> 组内按加急/重量优先排序 -> 贪心装箱
+  // 智能拼货推荐：兼容 v1（按目的站分组）和 v2（混拼模式）
+  // v1 参数：targetDestinationCity + maxRecommendations → 按目的站分组，返回 recommendations[]
+  // v2 参数：targetOriginCities → 混拼模式，返回 recommendation + remainingCandidates
+  // 自动检测：如果传了 targetOriginCities 或 consolidationMode=="cross_city" 则走 v2，否则走 v1
   // ============================================================
   recommendLtlConsolidation: permissionProcedure(PERMISSIONS.LTL_ARRANGE_SHIP).input(
     z5.object({
       capacity: z5.number().min(0.1, "\u8F7D\u91CD\u5FC5\u987B\u5927\u4E8E0"),
-      // 车辆载重（吨）
       vehicleLength: z5.string().optional(),
-      // 车长（仅作回显）
-      vehicleModel: z5.string().optional(),
-      // 车型（仅作回显）
+      vehicleModels: z5.array(z5.string()).optional(),
+      // v1 旧参数（主应用兼容）
       targetDestinationCity: z5.string().optional(),
-      // 限定目的站，留空则跨站推荐
-      candidateOrderIds: z5.array(z5.number()).optional(),
-      // 限定候选范围，留空则取所有可派订单
       maxRecommendations: z5.number().min(1).max(10).default(5),
-      // 返回前N个组合
-      fillRateMin: z5.number().min(0).max(1).default(0.5)
-      // 装载率下限（默认50%才推荐）
+      // v2 新参数（/ltl/ 独立工作台）
+      targetOriginCities: z5.array(z5.string()).optional(),
+      consolidationMode: z5.enum(["by_destination", "cross_city"]).optional(),
+      // 共用
+      candidateOrderIds: z5.array(z5.number()).optional(),
+      fillRateMin: z5.number().min(0).max(1).default(0.3)
     })
   ).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return { recommendations: [], totalCandidates: 0, capacity: input.capacity };
+    const useV2 = input.consolidationMode === "cross_city" || input.targetOriginCities && input.targetOriginCities.length > 0 || !input.targetDestinationCity && !input.consolidationMode;
+    if (!db) {
+      if (useV2) return { recommendation: null, remainingCandidates: [], totalCandidates: 0, capacity: input.capacity };
+      return { recommendations: [], totalCandidates: 0, capacity: input.capacity };
+    }
     const baseConditions = [
       eq2(orders.businessType, "ltl"),
-      // 【并行化改造】派车候选包含待询价与已询价两种
-      or(
-        eq2(orders.status, "inquiry_confirmed"),
-        eq2(orders.status, "pending_inquiry")
-      )
+      eq2(orders.status, "inquiry_confirmed")
     ];
     if (input.candidateOrderIds && input.candidateOrderIds.length > 0) {
       baseConditions.push(inArray2(orders.id, input.candidateOrderIds));
     }
-    if (input.targetDestinationCity) {
+    if (useV2 && input.targetOriginCities && input.targetOriginCities.length > 0) {
+      baseConditions.push(inArray2(orders.originCity, input.targetOriginCities));
+    }
+    if (!useV2 && input.targetDestinationCity) {
       baseConditions.push(eq2(orders.destinationCity, input.targetDestinationCity));
     }
     const candidates = await db.select().from(orders).where(and2(...baseConditions));
@@ -8300,6 +8177,7 @@ var orderRouter = router({
     }
     const available = candidates.filter((o) => !dispatchedSet.has(Number(o.id)));
     if (available.length === 0) {
+      if (useV2) return { recommendation: null, remainingCandidates: [], totalCandidates: 0, capacity: input.capacity };
       return { recommendations: [], totalCandidates: 0, capacity: input.capacity };
     }
     const enriched = available.map((o) => {
@@ -8318,6 +8196,58 @@ var orderRouter = router({
         customerPrice: o.customerPrice ? Number(o.customerPrice) : 0
       };
     }).filter((o) => o.weight > 0);
+    if (useV2) {
+      const sorted = [...enriched].sort((a, b) => {
+        if (a.isUrgent !== b.isUrgent) return a.isUrgent ? -1 : 1;
+        return (b.weight || 0) - (a.weight || 0);
+      });
+      const picked = [];
+      let used = 0;
+      const notPicked = [];
+      for (const o of sorted) {
+        if (used + o.weight <= input.capacity + 1e-3) {
+          picked.push(o);
+          used += o.weight;
+        } else {
+          notPicked.push(o);
+        }
+      }
+      if (picked.length === 0) {
+        return { recommendation: null, remainingCandidates: [], totalCandidates: enriched.length, capacity: input.capacity };
+      }
+      const fillRate = used / input.capacity;
+      if (fillRate < input.fillRateMin) {
+        return { recommendation: null, remainingCandidates: [], totalCandidates: enriched.length, capacity: input.capacity };
+      }
+      const destBreakdown = {};
+      for (const o of picked) {
+        const key = o.destinationCity;
+        if (!destBreakdown[key]) destBreakdown[key] = { count: 0, weight: 0 };
+        destBreakdown[key].count += 1;
+        destBreakdown[key].weight = Number((destBreakdown[key].weight + o.weight).toFixed(3));
+      }
+      const urgentCount = picked.filter((o) => o.isUrgent).length;
+      const totalRevenue = picked.reduce((s, o) => s + (o.customerPrice || 0), 0);
+      const remainingSpace = input.capacity - used;
+      const remainingCandidates = notPicked.filter((o) => o.weight <= remainingSpace + 1e-3).sort((a, b) => (b.weight || 0) - (a.weight || 0)).slice(0, 10);
+      return {
+        recommendation: {
+          orderCount: picked.length,
+          totalWeight: Number(used.toFixed(3)),
+          fillRate: Number((fillRate * 100).toFixed(1)),
+          remainingSpace: Number(remainingSpace.toFixed(3)),
+          urgentCount,
+          totalRevenue: Number(totalRevenue.toFixed(2)),
+          destBreakdown,
+          orders: picked
+        },
+        remainingCandidates,
+        totalCandidates: enriched.length,
+        capacity: input.capacity,
+        vehicleLength: input.vehicleLength || null,
+        vehicleModels: input.vehicleModels && input.vehicleModels.length > 0 ? input.vehicleModels : null
+      };
+    }
     const byDest = /* @__PURE__ */ new Map();
     for (const o of enriched) {
       const key = o.destinationCity;
@@ -8340,7 +8270,7 @@ var orderRouter = router({
       }
       if (picked.length === 0) continue;
       const fillRate = used / input.capacity;
-      if (fillRate < input.fillRateMin) continue;
+      if (fillRate < (input.fillRateMin || 0.5)) continue;
       const urgentCount = picked.filter((o) => o.isUrgent).length;
       const totalRevenue = picked.reduce((s, o) => s + (o.customerPrice || 0), 0);
       const score = fillRate * 0.6 + Math.min(urgentCount / Math.max(picked.length, 1), 1) * 0.3 + Math.min(picked.length / 10, 1) * 0.1;
@@ -8362,7 +8292,7 @@ var orderRouter = router({
       totalCandidates: enriched.length,
       capacity: input.capacity,
       vehicleLength: input.vehicleLength || null,
-      vehicleModel: input.vehicleModel || null
+      vehicleModels: input.vehicleModels && input.vehicleModels.length > 0 ? input.vehicleModels : null
     };
   }),
   // 删除零担派车批次（权限细化）
@@ -9271,7 +9201,7 @@ var orderRouter = router({
       changes: { childOrderIds: input.childOrderIds, totalWeight },
       description: `\u5408\u5E76 ${childOrders.length} \u4E2A\u8BA2\u5355\u4E3A\u4E3B\u8BA2\u5355 ${systemCode}\uFF0C\u603B\u91CD\u91CF ${totalWeight} \u5428`
     });
-     return {
+    return {
       parentOrderId: parentId,
       systemCode,
       mergedCount: childOrders.length,
@@ -9279,128 +9209,116 @@ var orderRouter = router({
     };
   }),
   // ============================================================
-  // 智能选车推荐：根据当前发出城市推荐常驻车辆
+  // 零担前段外请子链自动创建（从零担工作台前段模式弹窗调用）
+  // 自动创建外请子单，同时标记主单 ltlPickupOutsourced=true
   // ============================================================
-  recommendLtlVehicles: protectedProcedure.input(
+  createLtlPickupSubchain: protectedProcedure.input(
     z5.object({
-      departureCity: z5.string().optional(),
-      keyword: z5.string().optional(),
-      limit: z5.number().min(1).max(50).default(20)
+      parentOrderId: z5.number()
     })
-  ).query(async ({ input }) => {
+  ).mutation(async ({ ctx, input }) => {
     const db = await getDb();
-    if (!db) return { items: [], departureCity: input.departureCity || null };
-    const conditions = [eq2(vehicles.isActive, true)];
-    if (input.keyword) {
-      conditions.push(like2(vehicles.plateNumber, `%${input.keyword}%`));
+    if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+    const [parentOrder] = await db.select().from(orders).where(eq2(orders.id, input.parentOrderId)).limit(1);
+    if (!parentOrder) {
+      throw new TRPCError4({ code: "NOT_FOUND", message: "\u7236\u8BA2\u5355\u4E0D\u5B58\u5728" });
     }
-    const vRows = await db.select().from(vehicles).where(and2(...conditions)).limit(200);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1e3);
-    const lastUseRows = await db.select({
-      plateNumber: ltlDispatchBatches.plateNumber,
-      lastDispatch: sql2`MAX(${ltlDispatchBatches.dispatchDate})`,
-      useCount: count()
-    }).from(ltlDispatchBatches).where(sql2`${ltlDispatchBatches.dispatchDate} >= ${thirtyDaysAgo}`).groupBy(ltlDispatchBatches.plateNumber);
-    const lastUseMap = new Map(lastUseRows.map((r) => [r.plateNumber, { lastDispatch: r.lastDispatch, useCount: Number(r.useCount) }]));
-    const items = [];
-    for (const v of vRows) {
-      let driver = null;
-      if (v.driverId) {
-        const dr = await db.select().from(drivers).where(eq2(drivers.id, v.driverId)).limit(1);
-        driver = dr[0] || null;
-      }
-      if (!driver) {
-        const dr = await db.select().from(drivers).where(eq2(drivers.commonPlateNumber, v.plateNumber)).limit(1);
-        driver = dr[0] || null;
-      }
-      const freq = v.frequentCities || null;
-      const u = lastUseMap.get(v.plateNumber);
-      const useCount = u?.useCount || 0;
-      const isNew = !freq || Object.keys(freq).length === 0;
-      let cityWeight = 0;
-      let isResident = false;
-      let primaryCity = null;
-      if (freq && typeof freq === "object") {
-        const entries = Object.entries(freq).map(([c, w]) => [c, Number(w) || 0]);
-        entries.sort((a, b) => b[1] - a[1]);
-        if (entries.length > 0) primaryCity = entries[0][0];
-        if (input.departureCity) {
-          const hit = entries.find((e) => e[0] === input.departureCity);
-          if (hit) {
-            cityWeight = hit[1];
-            isResident = hit[1] >= 0.6;
-          }
-        }
-      }
-      let score = 0;
-      if (isResident) score += 1000;
-      score += cityWeight * 100;
-      score += Math.min(useCount, 30);
-      if (isNew) score += 50;
-      items.push({
-        plateNumber: v.plateNumber,
-        vehicleType: v.vehicleType,
-        vehicleLength: v.vehicleLength || null,
-        vehicleModel: v.vehicleModel || null,
-        capacity: v.capacity,
-        standardCapacity: v.standardCapacity || null,
-        driverName: driver?.name || null,
-        driverPhone: driver?.phone || null,
-        frequentCities: freq,
-        primaryCity,
-        cityWeight,
-        isResident,
-        isNewVehicle: isNew,
-        recentUseCount: useCount,
-        lastDispatch: u?.lastDispatch || null,
-        score
+    if (parentOrder.businessType !== "ltl") {
+      throw new TRPCError4({ code: "BAD_REQUEST", message: "\u4EC5\u96F6\u62C5\u8BA2\u5355\u652F\u6301\u521B\u5EFA\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE" });
+    }
+    const normalizedParentIds = [input.parentOrderId];
+    const duplicated = await findExistingLtlSubchain(db, normalizedParentIds, "pickup");
+    if (duplicated) {
+      throw new TRPCError4({
+        code: "BAD_REQUEST",
+        message: `\u8BE5\u8BA2\u5355\u5DF2\u5B58\u5728\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE\uFF1A${duplicated.orderNumber || `#${duplicated.id}`}\uFF0C\u8BF7\u52FF\u91CD\u590D\u521B\u5EFA`
       });
     }
-    items.sort((a, b) => b.score - a.score);
-    return { items: items.slice(0, input.limit), departureCity: input.departureCity || null };
-  }),
-  // ============================================================
-  // 查询某车辆的常驻发出城市（用于选车后过滤订单）
-  // ============================================================
-  getLtlVehicleResidency: protectedProcedure.input(
-    z5.object({ plateNumber: z5.string().min(1) })
-  ).query(async ({ input }) => {
-    const db = await getDb();
-    if (!db) return { plateNumber: input.plateNumber, frequentCities: null, residentCities: [], primaryCity: null, isNewVehicle: true };
-    const vRows = await db.select().from(vehicles).where(eq2(vehicles.plateNumber, input.plateNumber)).limit(1);
-    const v = vRows[0];
-    if (!v) {
-      return { plateNumber: input.plateNumber, frequentCities: null, residentCities: [], primaryCity: null, isNewVehicle: true };
+    const systemCode = await generateSystemCode();
+    const entryQueueMetadata = buildEntryQueueMetadata({ reason: "new" });
+    const subchainRemarks = applyLtlRemarkTag({
+      remarks: parentOrder.remarks,
+      tag: "\u3010\u96F6\u62C5\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE\u3011",
+      enabled: true,
+      operatorName: ctx.user.name ?? ctx.user.username ?? null
+    });
+    const result = await db.insert(orders).values({
+      systemCode,
+      orderNumber: parentOrder.orderNumber || systemCode,
+      mergedPlanNumber: parentOrder.mergedPlanNumber || null,
+      businessType: "outsource",
+      status: "pending_price",
+      ...entryQueueMetadata,
+      isUrgent: parentOrder.isUrgent,
+      urgentReason: parentOrder.urgentReason || null,
+      customerId: parentOrder.customerId || null,
+      customerName: parentOrder.customerName || null,
+      customerPhone: parentOrder.customerPhone || null,
+      settlementType: parentOrder.settlementType || null,
+      cargoName: parentOrder.cargoName || null,
+      weight: parentOrder.weight || null,
+      originCity: parentOrder.originCity || null,
+      destinationCity: parentOrder.destinationCity || null,
+      destinationProvince: parentOrder.destinationProvince || null,
+      originProvince: parentOrder.originProvince || null,
+      deliveryAddress: parentOrder.deliveryAddress || null,
+      receiverName: parentOrder.receiverName || null,
+      receiverPhone: parentOrder.receiverPhone || null,
+      customerPrice: parentOrder.customerPrice || null,
+      cargoSpec: parentOrder.cargoSpec || null,
+      specialRequirements: parentOrder.specialRequirements || null,
+      shippingNote: parentOrder.shippingNote || null,
+      remarks: subchainRemarks,
+      warehouseName: parentOrder.warehouseName || null,
+      isLargeSlab: parentOrder.isLargeSlab || false,
+      chargeableWeight: parentOrder.chargeableWeight || null,
+      packageCount: parentOrder.packageCount || null,
+      palletCount: parentOrder.palletCount || null,
+      parentId: input.parentOrderId,
+      relatedParentIds: [input.parentOrderId],
+      subchainStage: "pickup",
+      ltlSegmentMode: "pickup_outsource",
+      orderDate: /* @__PURE__ */ new Date(),
+      createdBy: ctx.user.id
+    });
+    const insertedId = Number(result[0].insertId);
+    const parentRemarks = applyLtlRemarkTag({
+      remarks: parentOrder.remarks,
+      tag: "\u3010\u524D\u6BB5\u5DF2\u8F6C\u5916\u8BF7\u3011",
+      enabled: true,
+      operatorName: ctx.user.name ?? ctx.user.username ?? null
+    });
+    await db.update(orders).set({
+      ltlPickupOutsourced: true,
+      remarks: parentRemarks
+    }).where(eq2(orders.id, input.parentOrderId));
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name || ctx.user.username || void 0,
+      action: "create",
+      targetType: "order",
+      targetId: String(insertedId),
+      description: `\u96F6\u62C5\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE\u81EA\u52A8\u521B\u5EFA\uFF1A\u7236\u5355#${input.parentOrderId} \u2192 \u5B50\u5355#${insertedId}(${systemCode})\uFF0C\u72B6\u6001pending_price\uFF0C\u8FDB\u5165\u6307\u6325\u53F0\u5F85\u5B9A\u4EF7\u961F\u5217`
+    });
+    try {
+      const matched = await autoAssignDispatcher(parentOrder.destinationCity);
+      if (matched) {
+        await db.update(orders).set({
+          assignedDispatcherId: matched.dispatcherId
+        }).where(eq2(orders.id, insertedId));
+      }
+    } catch (e) {
+      console.error("[createLtlPickupSubchain] autoAssignDispatcher failed:", e);
     }
-    const freq = v.frequentCities || null;
-    if (!freq || typeof freq !== "object" || Object.keys(freq).length === 0) {
-      return { plateNumber: input.plateNumber, frequentCities: null, residentCities: [], primaryCity: null, isNewVehicle: true };
-    }
-    const entries = Object.entries(freq).map(([c, w]) => [c, Number(w) || 0]).sort((a, b) => b[1] - a[1]);
-    const residentCities = entries.filter((e) => e[1] >= 0.6).map((e) => e[0]);
-    if (residentCities.length === 0 && entries.length > 0) residentCities.push(entries[0][0]);
     return {
-      plateNumber: input.plateNumber,
-      frequentCities: freq,
-      residentCities,
-      primaryCity: entries[0][0],
-      isNewVehicle: false
+      success: true,
+      subchainOrderId: insertedId,
+      systemCode,
+      message: `\u5DF2\u81EA\u52A8\u521B\u5EFA\u524D\u6BB5\u5916\u8BF7\u5B50\u5355 ${systemCode}\uFF0C\u8FDB\u5165\u6307\u6325\u53F0\u5F85\u5B9A\u4EF7\u961F\u5217`
     };
-  }),
-  // ============================================================
-  // 手动重算指定车辆的常驻城市（或全量重算）
-  // ============================================================
-  recomputeFrequentCities: protectedProcedure.input(
-    z5.object({ plateNumber: z5.string().optional() }).optional()
-  ).mutation(async ({ input }) => {
-    if (input?.plateNumber) {
-      await recomputeVehicleFrequentCities(input.plateNumber);
-      return { success: true, plateNumber: input.plateNumber };
-    }
-    await recomputeAllFrequentCities();
-    return { success: true, all: true };
   })
 });
+
 // server/routers/approval.ts
 import { z as z6 } from "zod";
 init_db();
@@ -12799,7 +12717,7 @@ function parseChineseCount(raw) {
   }
   return map[text2] ?? null;
 }
-function normalizeCount(raw) { raw = String(raw);
+function normalizeCount(raw) {
   if (!raw) return "";
   const digitMatch = raw.match(/\d+/);
   if (digitMatch) return digitMatch[0];
@@ -12808,7 +12726,7 @@ function normalizeCount(raw) { raw = String(raw);
   const count8 = parseChineseCount(chineseMatch[0]);
   return count8 != null ? String(count8) : "";
 }
-function normalizeCargoSpec(raw) { raw = String(raw);
+function normalizeCargoSpec(raw) {
   if (!raw) return "";
   const matches = raw.match(/\d{3,4}\s*[xX×*]\s*\d{3,4}/g);
   if (matches && matches.length > 0) {
@@ -12957,7 +12875,7 @@ var smartPasteRouter = router({
 - receiverPhone: \u6536\u8D27\u4EBA\u7535\u8BDD\uFF08\u5982"18244363569""0757-82275371"\uFF0C\u652F\u6301\u624B\u673A\u53F7\u548C\u5EA7\u673A\u53F7\u683C\u5F0F\uFF09
 - cargoSpec: \u8D27\u7269\u89C4\u683C\uFF08\u89C4\u683C\u5B57\u6BB5\uFF0C\u4F18\u5148\u63D0\u53D6\u6807\u51C6\u5C3A\u5BF8\uFF0C\u5982"1800*900""2700*1200"\uFF1B\u591A\u4E2A\u89C4\u683C\u53EF\u7528" / "\u8FDE\u63A5\uFF09
 - specialRequirements: \u7279\u6B8A\u8981\u6C42\uFF08\u5BA2\u6237\u7279\u6B8A\u8981\u6C42\u3001\u540C\u89C4\u683C\u62FC\u6258\u3001\u5305\u88C5/\u4EA4\u63A5\u8981\u6C42\u7B49\u7ED3\u6784\u5316\u8BF4\u660E\uFF09
-- shippingNote: \u53D1\u8D27\u5907\u6CE8\uFF08\u4EE5\u4E0B\u5185\u5BB9\u5FC5\u987B\u5B8C\u6574\u4FDD\u7559\u5230 shippingNote\uFF1A\u2460SC-/SA-/SB-\u7B49\u5206\u7EC4\u53D1\u8D27\u8BF4\u660E\u884C\uFF08\u5982\u201CSC-\u9884\u8BA12700X1200\u94C1\u67B62\u4E2A\u3001826\u94C1\u7B261\u4E2A\u3001918\u4E24\u6258\u201D\uFF09\uFF0C\u5373\u4F7F\u5176\u4E2D\u90E8\u5206\u5185\u5BB9\u53EF\u7ED3\u6784\u5316\uFF0C\u6574\u884C\u539F\u59CB\u6587\u672C\u4E5F\u5FC5\u987B\u5B8C\u6574\u4FDD\u7559\uFF1B\u2461\u94C1\u67B6/\u94C1\u7B261/\u7279\u6B8A\u5305\u88C5\u5BB9\u5668\u7684\u6570\u91CF\u548C\u89C4\u683C\u8BF4\u660E\uFF1B\u2462\u201C\u9884\u8BA1X\u5929\u53EF\u63D0\u201D\u201C\u540E\u5929\u53EF\u63D0\u201D\u7B49\u63D0\u8D27\u65F6\u6548\u8BF4\u660E\uFF1B\u2463\u5176\u4ED6\u65E0\u6CD5\u5F52\u5165\u7ED3\u6784\u5316\u5B57\u6BB5\u4F46\u5C5E\u4E8E\u53D1\u8D27\u8BF4\u660E\u7684\u5185\u5BB9\uFF09
+- shippingNote: \u53D1\u8D27\u5907\u6CE8\u515C\u5E95\u6587\u672C\uFF08\u4EC5\u4FDD\u7559\u65E0\u6CD5\u5F52\u5165\u4E0A\u8FF0\u7ED3\u6784\u5316\u5B57\u6BB5\u4F46\u786E\u5B9E\u5C5E\u4E8E\u53D1\u8D27\u8BF4\u660E\u7684\u5185\u5BB9\uFF1B\u5982\u679C\u89C4\u683C\u3001\u6258\u6570\u3001\u5927\u677F\u53D1\u8D27\u8981\u6C42\u5DF2\u7ECF\u80FD\u7ED3\u6784\u5316\u8868\u8FBE\uFF0C\u5C31\u4E0D\u8981\u518D\u91CD\u590D\u585E\u5165 shippingNote\uFF09
 - remarks: \u5176\u4ED6\u5907\u6CE8\u4FE1\u606F\uFF08\u3010\u91CD\u8981\u3011\u5305\u62EC\u4F46\u4E0D\u9650\u4E8E\uFF1A\u88C5\u5378\u987A\u5E8F\u8BF4\u660E\u5982"\u5148\u88C5XX\u518D\u88C5XX""\u5148\u5378XX\u518D\u5378XX"\u3001\u9001\u8D27\u65F6\u95F4\u8981\u6C42\u5982"\u6700\u665A\u8981\u5728X\u53F7\u5230\u8D27""\u9884\u8BA1X\u6708X\u53F7\u53EF\u63D0"\u3001\u5BA2\u6237\u7279\u6B8A\u8981\u6C42\u5982"\u8981\u5F00\u8BA2\u8D27\u4F1A""\u6837\u677F"\u3001\u8C03\u5EA6\u5B89\u6392\u8BF4\u660E\u5982"\u8BF7\u5B89\u6392""\u5171XX\u5428""\u52A0\u6025\u5B89\u6392"\u7B49\u3002\u8FD9\u4E9B\u4FE1\u606F\u975E\u5E38\u91CD\u8981\uFF0C\u5FC5\u987B\u5B8C\u6574\u63D0\u53D6\uFF01\uFF09
 - isUrgent: \u662F\u5426\u52A0\u6025\uFF08\u5E03\u5C14\u503C\uFF09
 - urgentReason: \u52A0\u6025\u539F\u56E0\uFF08\u5F53isUrgent\u4E3Atrue\u65F6\u5FC5\u586B\uFF0C\u4ECE\u6587\u672C\u4E2D\u63D0\u53D6\u52A0\u6025\u539F\u56E0\uFF0C\u5982"\u52A0\u6025""\u7D27\u6025""\u5C3D\u5FEB"\u7B49\uFF0C\u82E5\u65E0\u5177\u4F53\u539F\u56E0\u5219\u586B"\u52A0\u6025"\uFF09
@@ -12978,7 +12896,7 @@ var smartPasteRouter = router({
 
 \u3010\u5BA2\u6237\u62A5\u4EF7(customerPrice)\u6781\u5176\u91CD\u8981\u7684\u89C4\u5219\u3011\uFF1A
 8. \u53EA\u6709\u5F53\u539F\u6587\u4E2D\u660E\u786E\u51FA\u73B0\u4E86\u4EF7\u683C/\u91D1\u989D/\u8D39\u7528/\u62A5\u4EF7/\u8FD0\u8D39\u7B49\u6570\u5B57\u65F6\uFF0C\u624D\u80FD\u586B\u5199customerPrice\u3002\u4EE5\u4E0B\u60C5\u51B5\u5747\u5E94\u8BC6\u522B\u4E3A\u8FD0\u8D39\uFF1A
-   - \u660E\u786E\u6807\u6CE8\u7684\u8FD0\u8D39\uFF08\u5982"\u603B\u4EF73937.98""\u8FD0\u8D395000""\u62A5\u4EF7280\u5143""\u603B\u4EF7\uFF1A5248"\uFF09\uFF1B\u300C\u603B\u4EF7\uFF1A\u6570\u5B57\u300D\u683C\u5F0F\u5FC5\u987B\u8BC6\u522B\u4E3AcustomerPrice\uFF0C\u5373\u4F7F\u540E\u9762\u8DDF\u7740\u5176\u4ED6\u6587\u5B57\uFF08\u5982"\u603B\uFF1A27.79\u5428"\uFF09\u4E5F\u4E0D\u5F71\u54CD\u8BC6\u522B
+   - \u660E\u786E\u6807\u6CE8\u7684\u8FD0\u8D39\uFF08\u5982"\u603B\u4EF73937.98""\u8FD0\u8D395000""\u62A5\u4EF7280\u5143"\uFF09
    - \u4EF7\u683C\u540E\u8DDF\u62EC\u53F7\u8BF4\u660E\uFF08\u5982"1357.13\uFF08\u542B\u9001150+\u63D0400+\u537856.84\uFF09"\uFF09
    - \u3010\u91CD\u8981\u3011\u6587\u672C\u4E2D\u51FA\u73B0\u5B64\u7ACB\u7684\u7EAF\u6570\u5B57\u884C\uFF08\u5355\u72EC\u4E00\u884C\u53EA\u6709\u6570\u5B57\uFF0C\u5982"1900"\u6216"1357.13"\uFF09\uFF0C\u8FD9\u901A\u5E38\u662F\u5BA2\u6237\u5355\u72EC\u53D1\u9001\u7684\u8FD0\u8D39\u91D1\u989D\uFF0C\u5E94\u8BC6\u522B\u4E3AcustomerPrice
    - \u6B63\u5219\u9884\u63D0\u53D6\u7ED3\u679C\u4E2D\u5982\u679CcustomerPrice\u6709\u503C\uFF0C\u4F18\u5148\u4F7F\u7528\u8BE5\u503C
@@ -13126,32 +13044,32 @@ var smartPasteRouter = router({
               }
             }
           }
-          if ((!order.customerPrice || String(order.customerPrice).trim() === "") && regexResults.customerPrice) {
+          if ((!order.customerPrice || order.customerPrice.trim() === "") && regexResults.customerPrice) {
             order.customerPrice = regexResults.customerPrice;
             if (regexResults.customerPriceNote) {
               order.remarks = order.remarks ? `${order.remarks}\uFF08${regexResults.customerPriceNote}\uFF09` : `\uFF08${regexResults.customerPriceNote}\uFF09`;
             }
           }
-          if ((!order.warehouseName || String(order.warehouseName).trim() === "") && regexResults.warehouseFromEmDash) {
+          if ((!order.warehouseName || order.warehouseName.trim() === "") && regexResults.warehouseFromEmDash) {
             order.warehouseName = regexResults.warehouseFromEmDash;
           }
-          if ((!order.deliveryAddress || String(order.deliveryAddress).trim() === "") && regexResults.addressFromEmDash) {
+          if ((!order.deliveryAddress || order.deliveryAddress.trim() === "") && regexResults.addressFromEmDash) {
             order.deliveryAddress = regexResults.addressFromEmDash;
           }
-          if (!order.cargoSpec || String(order.cargoSpec).trim() === "") {
+          if (!order.cargoSpec || order.cargoSpec.trim() === "") {
             order.cargoSpec = normalizeCargoSpec(regexResults.specLines || regexResults.sizes || "");
           } else {
             order.cargoSpec = normalizeCargoSpec(order.cargoSpec);
           }
-          if ((!order.chargeableWeight || String(order.chargeableWeight).trim() === "") && regexResults.chargeableWeight) {
+          if ((!order.chargeableWeight || order.chargeableWeight.trim() === "") && regexResults.chargeableWeight) {
             order.chargeableWeight = regexResults.chargeableWeight;
           }
-          if (!order.palletCount || String(order.palletCount).trim() === "") {
+          if (!order.palletCount || order.palletCount.trim() === "") {
             order.palletCount = normalizeCount(regexResults.tuoInfo || input.text.match(/(?:共)?\s*(\d+|[零一二两三四五六七八九十]+)\s*托/)?.[0] || "");
           } else {
             order.palletCount = normalizeCount(order.palletCount);
           }
-          if (!order.packageCount || String(order.packageCount).trim() === "") {
+          if (!order.packageCount || order.packageCount.trim() === "") {
             order.packageCount = normalizeCount(regexResults.jiaInfo || input.text.match(/(?:共)?\s*(\d+|[零一二两三四五六七八九十]+)\s*架/)?.[0] || "");
           } else {
             order.packageCount = normalizeCount(order.packageCount);
@@ -13160,11 +13078,11 @@ var smartPasteRouter = router({
           if (!order.largeSlabShippingRequired) {
             order.largeSlabShippingRequired = /按大板发货要求执行|按大板发货要求|按大板要求发货|大板发货要求执行/.test(slabShippingText);
           }
-          if (order.largeSlabShippingRequired && (!order.specialRequirements || String(order.specialRequirements).trim() === "")) {
+          if (order.largeSlabShippingRequired && (!order.specialRequirements || order.specialRequirements.trim() === "")) {
             const slabRequirementMatch = slabShippingText.match(/按大板发货要求执行[^\n，。,；;]*|按大板要求发货[^\n，。,；;]*|大板发货要求执行[^\n，。,；;]*/);
             order.specialRequirements = slabRequirementMatch ? slabRequirementMatch[0].trim() : "\u6309\u5927\u677F\u53D1\u8D27\u8981\u6C42\u6267\u884C";
           }
-          if (!order.shippingNote || String(order.shippingNote).trim() === "") {
+          if (!order.shippingNote || order.shippingNote.trim() === "") {
             order.shippingNote = extractFallbackShippingNote(input.text);
           }
           if (!order.isUrgent) {

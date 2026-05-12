@@ -330,6 +330,7 @@ export const orders = mysqlTable("orders", {
   relatedParentIds: json("relatedParentIds"),
   subchainStage: mysqlEnum("subchainStage", ["pickup", "delivery"]),
   ltlSegmentMode: varchar("ltlSegmentMode", { length: 50 }),
+  ltlPickupOutsourced: boolean("ltlPickupOutsourced"),
   isMerged: boolean("isMerged").default(false), // 是否为合并主订单
   // 其他备注
   remarks: text("remarks"),

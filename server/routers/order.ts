@@ -3713,6 +3713,7 @@ export const orderRouter = router({
       reassignReason: z.string().optional(),
       ltlCustomerPickup: z.boolean().optional(),
       ltlCustomerSelfDeliverConfirmed: z.boolean().optional(),
+      ltlPickupOutsourced: z.boolean().optional(),
     }),
   ).mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -3723,6 +3724,7 @@ export const orderRouter = router({
       reassignReason,
       ltlCustomerPickup,
       ltlCustomerSelfDeliverConfirmed,
+      ltlPickupOutsourced,
       ...fields
     } = input; // driverIdCard及零担模式操作字段不在orders表中，排除
     const updateData: Record<string, any> = {};
@@ -3817,6 +3819,22 @@ export const orderRouter = router({
         updateData.receivingConfirmedAt = updateData.receivingConfirmedAt ?? new Date();
         updateData.receivingConfirmedBy = ctx.user!.id;
         updateData.receivingConfirmedByName = ctx.user!.name ?? ctx.user!.username ?? "未知";
+      }
+    }
+    // 零担前段外请标记
+    if (ltlPickupOutsourced !== undefined) {
+      if (effectiveBusinessType !== "ltl") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "仅零担订单支持前段外请标记。" });
+      }
+      updateData.ltlPickupOutsourced = ltlPickupOutsourced;
+      if (ltlPickupOutsourced) {
+        const nextRemarksBase = updateData.remarks ?? currentOrder.remarks;
+        updateData.remarks = applyLtlRemarkTag({
+          remarks: nextRemarksBase,
+          tag: "【前段已转外请】",
+          enabled: true,
+          operatorName: ctx.user!.name ?? ctx.user!.username ?? null,
+        });
       }
     }
     // 当更新车牌号时，自动关联vehicleId和driverId
@@ -5518,6 +5536,122 @@ export const orderRouter = router({
       systemCode,
       mergedCount: childOrders.length,
       totalWeight,
+    };
+  }),
+
+  // ============================================================
+  // 零担前段外请子链自动创建（从零担工作台前段模式弹窗调用）
+  // 自动创建外请子单，同时标记主单 ltlPickupOutsourced=true
+  // ============================================================
+  createLtlPickupSubchain: protectedProcedure.input(
+    z.object({
+      parentOrderId: z.number(),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+    // 1. 查询父订单
+    const [parentOrder] = await db.select().from(orders).where(eq(orders.id, input.parentOrderId)).limit(1);
+    if (!parentOrder) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "父订单不存在" });
+    }
+    if (parentOrder.businessType !== "ltl") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "仅零担订单支持创建前段外请子链" });
+    }
+    // 2. 检查是否已存在前段外请子链（防重）
+    const normalizedParentIds = [input.parentOrderId];
+    const duplicated = await findExistingLtlSubchain(db, normalizedParentIds, "pickup");
+    if (duplicated) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `该订单已存在前段外请子链：${duplicated.orderNumber || `#${duplicated.id}`}，请勿重复创建`,
+      });
+    }
+    // 3. 创建外请子单
+    const systemCode = await generateSystemCode();
+    const entryQueueMetadata = buildEntryQueueMetadata({ reason: "new" });
+    const subchainRemarks = applyLtlRemarkTag({
+      remarks: parentOrder.remarks,
+      tag: "【零担前段外请子链】",
+      enabled: true,
+      operatorName: ctx.user!.name ?? ctx.user!.username ?? null,
+    });
+    const result = await db.insert(orders).values({
+      systemCode,
+      orderNumber: parentOrder.orderNumber || systemCode,
+      mergedPlanNumber: parentOrder.mergedPlanNumber || null,
+      businessType: "outsource",
+      status: "pending_price" as any,
+      ...entryQueueMetadata,
+      isUrgent: parentOrder.isUrgent,
+      urgentReason: parentOrder.urgentReason || null,
+      customerId: parentOrder.customerId || null,
+      customerName: parentOrder.customerName || null,
+      customerPhone: parentOrder.customerPhone || null,
+      settlementType: parentOrder.settlementType || null,
+      cargoName: parentOrder.cargoName || null,
+      weight: parentOrder.weight || null,
+      originCity: parentOrder.originCity || null,
+      destinationCity: parentOrder.destinationCity || null,
+      destinationProvince: parentOrder.destinationProvince || null,
+      originProvince: parentOrder.originProvince || null,
+      deliveryAddress: parentOrder.deliveryAddress || null,
+      receiverName: parentOrder.receiverName || null,
+      receiverPhone: parentOrder.receiverPhone || null,
+      customerPrice: parentOrder.customerPrice || null,
+      cargoSpec: parentOrder.cargoSpec || null,
+      specialRequirements: parentOrder.specialRequirements || null,
+      shippingNote: parentOrder.shippingNote || null,
+      remarks: subchainRemarks,
+      warehouseName: parentOrder.warehouseName || null,
+      isLargeSlab: parentOrder.isLargeSlab || false,
+      chargeableWeight: parentOrder.chargeableWeight || null,
+      packageCount: parentOrder.packageCount || null,
+      palletCount: parentOrder.palletCount || null,
+      parentId: input.parentOrderId,
+      relatedParentIds: [input.parentOrderId],
+      subchainStage: "pickup",
+      ltlSegmentMode: "pickup_outsource",
+      orderDate: new Date(),
+      createdBy: ctx.user!.id,
+    });
+    const insertedId = Number(result[0].insertId);
+    // 4. 标记父订单 ltlPickupOutsourced=true
+    const parentRemarks = applyLtlRemarkTag({
+      remarks: parentOrder.remarks,
+      tag: "【前段已转外请】",
+      enabled: true,
+      operatorName: ctx.user!.name ?? ctx.user!.username ?? null,
+    });
+    await db.update(orders).set({
+      ltlPickupOutsourced: true,
+      remarks: parentRemarks,
+    }).where(eq(orders.id, input.parentOrderId));
+    // 5. 记录操作日志
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name || ctx.user!.username || undefined,
+      action: "create",
+      targetType: "order",
+      targetId: String(insertedId),
+      description: `零担前段外请子链自动创建：父单#${input.parentOrderId} → 子单#${insertedId}(${systemCode})，状态pending_price，进入指挥台待定价队列`,
+    });
+    // 6. 尝试自动分配外请调度员
+    try {
+      const matched = await autoAssignDispatcher(parentOrder.destinationCity);
+      if (matched) {
+        await db.update(orders).set({
+          assignedDispatcherId: matched.dispatcherId,
+        }).where(eq(orders.id, insertedId));
+      }
+    } catch (e) {
+      console.error("[createLtlPickupSubchain] autoAssignDispatcher failed:", e);
+    }
+    return {
+      success: true,
+      subchainOrderId: insertedId,
+      systemCode,
+      message: `已自动创建前段外请子单 ${systemCode}，进入指挥台待定价队列`,
     };
   }),
 });
