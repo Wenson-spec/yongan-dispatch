@@ -331,6 +331,7 @@ export const orders = mysqlTable("orders", {
   subchainStage: mysqlEnum("subchainStage", ["pickup", "delivery"]),
   ltlSegmentMode: varchar("ltlSegmentMode", { length: 50 }),
   ltlPickupOutsourced: boolean("ltlPickupOutsourced"),
+  ltlPickupSourceStatus: varchar("ltlPickupSourceStatus", { length: 50 }), // 转外请前父订单的状态，用于原路返回
   isMerged: boolean("isMerged").default(false), // 是否为合并主订单
   // 其他备注
   remarks: text("remarks"),

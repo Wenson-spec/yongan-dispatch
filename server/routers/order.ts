@@ -5627,6 +5627,7 @@ export const orderRouter = router({
     });
     await db.update(orders).set({
       ltlPickupOutsourced: true,
+      ltlPickupSourceStatus: String(parentOrder.status || ""), // v22: 记录转外请前的状态，用于原路返回
       remarks: parentRemarks,
     }).where(eq(orders.id, input.parentOrderId));
     // 5. 记录操作日志
@@ -5654,6 +5655,78 @@ export const orderRouter = router({
       subchainOrderId: insertedId,
       systemCode,
       message: `已自动创建前段外请子单 ${systemCode}，进入指挥台待定价队列`,
+    };
+  }),
+
+  // ============================================================
+  // 零担前段外请子链退回（原路返回）
+  // 删除外请子单，恢复父订单到转外请前的状态
+  // ============================================================
+  revertLtlPickupSubchain: protectedProcedure.input(
+    z.object({
+      subchainOrderId: z.number(), // 外请子单ID
+      reason: z.string().min(1, "请填写退回原因"),
+    }),
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("数据库不可用");
+    // 1. 查询外请子单
+    const [subOrder] = await db.select().from(orders).where(eq(orders.id, input.subchainOrderId)).limit(1);
+    if (!subOrder) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "外请子单不存在" });
+    }
+    if (subOrder.subchainStage !== "pickup" || subOrder.ltlSegmentMode !== "pickup_outsource") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "该订单不是前段外请子链，不能使用此退回方式" });
+    }
+    const parentOrderId = subOrder.parentId;
+    if (!parentOrderId) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "外请子单没有关联父订单" });
+    }
+    // 2. 查询父订单
+    const [parentOrder] = await db.select().from(orders).where(eq(orders.id, parentOrderId)).limit(1);
+    if (!parentOrder) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "父订单不存在" });
+    }
+    // 3. 确定父订单恢复目标状态
+    const sourceStatus = (parentOrder as any).ltlPickupSourceStatus;
+    // 默认恢复到 inquiry_confirmed（询价已确认）或 pending_inquiry（待询价），取决于原始状态
+    let restoreStatus = sourceStatus || String(parentOrder.status || "inquiry_confirmed");
+    // 如果 restoreStatus 是当前状态（没变过），保持不变
+    if (restoreStatus === String(parentOrder.status)) {
+      // 父订单状态没被改过，不需要改状态
+    }
+    // 4. 在事务中执行：删除子单 + 恢复父订单
+    await db.transaction(async (tx) => {
+      // 删除外请子单
+      await tx.delete(orders).where(eq(orders.id, input.subchainOrderId));
+      // 恢复父订单
+      const restoreRemarks = applyLtlRemarkTag({
+        remarks: parentOrder.remarks,
+        tag: "【前段已转外请】",
+        enabled: false,
+        operatorName: ctx.user!.name ?? ctx.user!.username ?? null,
+      });
+      await tx.update(orders).set({
+        ltlPickupOutsourced: false,
+        ltlPickupSourceStatus: null,
+        remarks: restoreRemarks,
+        status: restoreStatus as any,
+      }).where(eq(orders.id, parentOrderId));
+    });
+    // 5. 记录操作日志
+    await createOperationLog({
+      userId: ctx.user!.id,
+      userName: ctx.user!.name ?? ctx.user!.username ?? undefined,
+      action: "revert",
+      targetType: "order",
+      targetId: String(input.subchainOrderId),
+      description: `零担前段外请子链退回：子单#${input.subchainOrderId} 已删除，父单#${parentOrderId}(${parentOrder.orderNumber}) 恢复到 ${restoreStatus}`,
+    });
+    return {
+      success: true,
+      parentOrderId,
+      restoredStatus: restoreStatus,
+      message: `外请子单已删除，父订单 ${parentOrder.orderNumber} 已恢复到${STATUS_LABELS[restoreStatus] || restoreStatus}`,
     };
   }),
 });
