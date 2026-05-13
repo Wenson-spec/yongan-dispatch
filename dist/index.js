@@ -9245,7 +9245,8 @@ var orderRouter = router({
     const result = await db.insert(orders).values({
       systemCode,
       orderNumber: parentOrder.orderNumber || systemCode,
-      mergedPlanNumber: parentOrder.mergedPlanNumber || null,
+      mergedPlanNumber: null,
+      // v22 fix: do NOT copy mergedPlanNumber to avoid isMergedChildOrder false positive
       businessType: "outsource",
       status: "pending_price",
       ...entryQueueMetadata,
