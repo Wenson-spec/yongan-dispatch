@@ -197,7 +197,9 @@ const STRUCTURED_RECEIVING_FIELDS = [
   "receivingNote",
 ] as const;
 
-function isMergedChildOrder(order: { parentId?: number | null; mergedPlanNumber?: string | null; status?: string | null; isMerged?: boolean | null }) {
+function isMergedChildOrder(order: { parentId?: number | null; mergedPlanNumber?: string | null; status?: string | null; isMerged?: boolean | null; subchainStage?: string | null; ltlSegmentMode?: string | null }) {
+  // v22 fix: outsource sub-chains (ltl pickup/delivery) have parentId but are NOT merged children
+  if (order.subchainStage || order.ltlSegmentMode) return false;
   return Boolean(order.parentId) || (Boolean(order.mergedPlanNumber) && order.status === "merged" && !order.isMerged);
 }
 

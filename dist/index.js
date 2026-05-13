@@ -4592,6 +4592,7 @@ var STRUCTURED_RECEIVING_FIELDS = [
   "receivingNote"
 ];
 function isMergedChildOrder(order) {
+  if (order.subchainStage || order.ltlSegmentMode) return false;
   return Boolean(order.parentId) || Boolean(order.mergedPlanNumber) && order.status === "merged" && !order.isMerged;
 }
 var STATUS_STAGE = {
