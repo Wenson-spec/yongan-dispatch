@@ -5798,7 +5798,8 @@ var orderRouter = router({
           like2(orders.receiverName, `%${input.keyword}%`),
           like2(orders.destinationCity, `%${input.keyword}%`),
           like2(orders.shippingNote, `%${input.keyword}%`),
-          like2(orders.remarks, `%${input.keyword}%`)
+          like2(orders.remarks, `%${input.keyword}%`),
+          like2(orders.mergedPlanNumber, `%${input.keyword}%`)
         )
       );
     }
