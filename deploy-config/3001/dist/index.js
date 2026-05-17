@@ -8952,7 +8952,7 @@ var orderRouter = router({
         );
         notifyOwner({
           title: `\u{1F4DD} \u6574\u7EC4\u6D3E\u8F66\u5BA1\u6279: ${firstOrder.mergedPlanNumber || firstOrder.orderNumber || `#${firstOrder.id}`}`,
-          content: `${targetOrders.length}\u5355 | \u5BA2\u6237: ${customerSummary} | \u53D1\u8D27\u4ED3: ${warehouseSummary} | \u8DEF\u7EBF: ${firstOrder.originCity || "?"} \u2192 ${firstOrder.destinationCity || "?"} | \u8F66\u724C: ${vehicleInfo.plateNumber} | \u603B\u8FD0\u8D39: \xA5${totalFreightNum}${isOverpriced ? ` (\u8D85\u51FA\xA5${Math.round((totalFreightNum - referencePrice) * 100) / 100})` : ""}${hasLargeSlab ? " | \u542B\u5927\u677F\u8BA2\u5355" : ""} | \u62A5\u4EF7\u4EBA: ${ctx.user.name || ctx.user.username || "\u672A\u77E5"}`
+          content: `${targetOrders.length}\u5355 | \u5BA2\u6237: ${customerSummary} | \u53D1\u8D27\u4ED3: ${warehouseSummary} | \u8DEF\u7EBF: ${formatGroupDistinctLabel(targetOrders.map(o => o.originCity), "\u5730")} \u2192 ${formatGroupDistinctLabel(targetOrders.map(o => o.destinationCity), "\u5730")} | \u8F66\u724C: ${vehicleInfo.plateNumber} | \u603B\u8FD0\u8D39: \xA5${totalFreightNum}${isOverpriced ? ` (\u8D85\u51FA\xA5${Math.round((totalFreightNum - referencePrice) * 100) / 100})` : ""}${hasLargeSlab ? " | \u542B\u5927\u677F\u8BA2\u5355" : ""} | \u62A5\u4EF7\u4EBA: ${ctx.user.name || ctx.user.username || "\u672A\u77E5"}`
         }).catch((e) => console.error("Batch dispatch approval notification failed:", e));
       } catch (e) {
       }
@@ -9176,13 +9176,13 @@ var orderRouter = router({
       settlementType: firstChild.settlementType || null,
       cargoName: childOrders.map((o) => o.cargoName).filter(Boolean).join(", ") || null,
       weight: String(Math.round(totalWeight * 1e3) / 1e3),
-      originCity: firstChild.originCity || null,
-      originProvince: firstChild.originProvince || null,
-      deliveryAddress: firstChild.deliveryAddress || null,
-      destinationCity: input.destinationCity || firstChild.destinationCity || null,
-      destinationProvince: firstChild.destinationProvince || null,
-      receiverName: firstChild.receiverName || null,
-      receiverPhone: firstChild.receiverPhone || null,
+      originCity: [...new Set(childOrders.map(o => o.originCity).filter(Boolean))].join("、") || null,
+      originProvince: [...new Set(childOrders.map(o => o.originProvince).filter(Boolean))].join("、") || null,
+      deliveryAddress: [...new Set(childOrders.map(o => o.deliveryAddress).filter(Boolean))].join("、") || null,
+      destinationCity: input.destinationCity || [...new Set(childOrders.map(o => o.destinationCity).filter(Boolean))].join("、") || null,
+      destinationProvince: [...new Set(childOrders.map(o => o.destinationProvince).filter(Boolean))].join("、") || null,
+      receiverName: [...new Set(childOrders.map(o => o.receiverName).filter(Boolean))].join("、") || null,
+      receiverPhone: [...new Set(childOrders.map(o => o.receiverPhone).filter(Boolean))].join("、") || null,
       customerPrice: totalCustomerPrice > 0 ? String(totalCustomerPrice) : null,
       isMerged: true,
       remarks: input.remarks || `\u5408\u5E76\u8BA2\u5355\uFF0C\u5305\u542B ${childOrders.length} \u4E2A\u5B50\u8BA2\u5355`,
