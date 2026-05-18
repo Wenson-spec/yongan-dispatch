@@ -91,6 +91,9 @@ function safeParseJSON(raw: string): any {
 
 // 正则预处理：从文本中提取常见字段
 function regexPreParse(text: string) {
+  // 预处理：将···分隔符统一为--
+  text = text.replace(/\u00B7{2,}/g, "--");
+
   const results: Record<string, string | null> = {};
 
   // 手机号（11位）
@@ -439,6 +442,12 @@ export const smartPasteRouter = router({
 31. 当多个子单共享同一个合并计划号时，每个子单的信息必须独立准确填写
 32. 不要将合并计划号下第一个子单的信息复制给其他子单
 33. 如果某个子单的某个字段无法从文本中确定，填空字符串
+
+发出仓库(warehouseName)独立识别规则（重要）：
+34. 每个子单可能有不同的发出仓库，必须为每个子单独立识别warehouseName
+35. 如果文本中出现多个仓库名（如"清远仓"和"佛山仓"），应根据上下文将不同仓库分配给对应的子单
+36. 如果文本中只有一个仓库名，则所有子单共用该仓库
+37. 仓库名通常出现在"--"或"---"分隔符左边，或者在"XX仓"格式中
 
 正则预提取结果供参考：${JSON.stringify(regexResults)}`;
 
@@ -994,6 +1003,7 @@ ${templateHint}
 3. remarks：必须提取装卸顺序说明（如"先装XX再装XX"）和调度安排说明（如"共31.84吨，请安排"）
 4. mergedPlanNumber：P开头+数字的编号就是合并计划号
 5. "--"或"---"分隔符左边是仓库，右边是收货地址
+6. 每个子单可能有不同的发出仓库，必须为每个子单独立识别warehouseName；如果只有一个仓库则所有子单共用
 
 正则预提取结果供参考：${JSON.stringify(regexResults)}`;
 

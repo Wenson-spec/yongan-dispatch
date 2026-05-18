@@ -422,6 +422,8 @@ var init_schema = __esm({
       subchainStage: mysqlEnum("subchainStage", ["pickup", "delivery"]),
       ltlSegmentMode: varchar("ltlSegmentMode", { length: 50 }),
       ltlPickupOutsourced: boolean("ltlPickupOutsourced"),
+      ltlPickupSourceStatus: varchar("ltlPickupSourceStatus", { length: 50 }),
+      // 转外请前父订单的状态，用于原路返回
       isMerged: boolean("isMerged").default(false),
       // 是否为合并主订单
       // 其他备注
@@ -9292,6 +9294,8 @@ var orderRouter = router({
     });
     await db.update(orders).set({
       ltlPickupOutsourced: true,
+      ltlPickupSourceStatus: String(parentOrder.status || ""),
+      // v22: 记录转外请前的状态，用于原路返回
       remarks: parentRemarks
     }).where(eq2(orders.id, input.parentOrderId));
     await createOperationLog({
@@ -9317,6 +9321,68 @@ var orderRouter = router({
       subchainOrderId: insertedId,
       systemCode,
       message: `\u5DF2\u81EA\u52A8\u521B\u5EFA\u524D\u6BB5\u5916\u8BF7\u5B50\u5355 ${systemCode}\uFF0C\u8FDB\u5165\u6307\u6325\u53F0\u5F85\u5B9A\u4EF7\u961F\u5217`
+    };
+  }),
+  // ============================================================
+  // 零担前段外请子链退回（原路返回）
+  // 删除外请子单，恢复父订单到转外请前的状态
+  // ============================================================
+  revertLtlPickupSubchain: protectedProcedure.input(
+    z5.object({
+      subchainOrderId: z5.number(),
+      // 外请子单ID
+      reason: z5.string().min(1, "\u8BF7\u586B\u5199\u9000\u56DE\u539F\u56E0")
+    })
+  ).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new Error("\u6570\u636E\u5E93\u4E0D\u53EF\u7528");
+    const [subOrder] = await db.select().from(orders).where(eq2(orders.id, input.subchainOrderId)).limit(1);
+    if (!subOrder) {
+      throw new TRPCError4({ code: "NOT_FOUND", message: "\u5916\u8BF7\u5B50\u5355\u4E0D\u5B58\u5728" });
+    }
+    if (subOrder.subchainStage !== "pickup" || subOrder.ltlSegmentMode !== "pickup_outsource") {
+      throw new TRPCError4({ code: "BAD_REQUEST", message: "\u8BE5\u8BA2\u5355\u4E0D\u662F\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE\uFF0C\u4E0D\u80FD\u4F7F\u7528\u6B64\u9000\u56DE\u65B9\u5F0F" });
+    }
+    const parentOrderId = subOrder.parentId;
+    if (!parentOrderId) {
+      throw new TRPCError4({ code: "BAD_REQUEST", message: "\u5916\u8BF7\u5B50\u5355\u6CA1\u6709\u5173\u8054\u7236\u8BA2\u5355" });
+    }
+    const [parentOrder] = await db.select().from(orders).where(eq2(orders.id, parentOrderId)).limit(1);
+    if (!parentOrder) {
+      throw new TRPCError4({ code: "NOT_FOUND", message: "\u7236\u8BA2\u5355\u4E0D\u5B58\u5728" });
+    }
+    const sourceStatus = parentOrder.ltlPickupSourceStatus;
+    let restoreStatus = sourceStatus || String(parentOrder.status || "inquiry_confirmed");
+    if (restoreStatus === String(parentOrder.status)) {
+    }
+    await db.transaction(async (tx) => {
+      await tx.delete(orders).where(eq2(orders.id, input.subchainOrderId));
+      const restoreRemarks = applyLtlRemarkTag({
+        remarks: parentOrder.remarks,
+        tag: "\u3010\u524D\u6BB5\u5DF2\u8F6C\u5916\u8BF7\u3011",
+        enabled: false,
+        operatorName: ctx.user.name ?? ctx.user.username ?? null
+      });
+      await tx.update(orders).set({
+        ltlPickupOutsourced: false,
+        ltlPickupSourceStatus: null,
+        remarks: restoreRemarks,
+        status: restoreStatus
+      }).where(eq2(orders.id, parentOrderId));
+    });
+    await createOperationLog({
+      userId: ctx.user.id,
+      userName: ctx.user.name ?? ctx.user.username ?? void 0,
+      action: "revert",
+      targetType: "order",
+      targetId: String(input.subchainOrderId),
+      description: `\u96F6\u62C5\u524D\u6BB5\u5916\u8BF7\u5B50\u94FE\u9000\u56DE\uFF1A\u5B50\u5355#${input.subchainOrderId} \u5DF2\u5220\u9664\uFF0C\u7236\u5355#${parentOrderId}(${parentOrder.orderNumber}) \u6062\u590D\u5230 ${restoreStatus}`
+    });
+    return {
+      success: true,
+      parentOrderId,
+      restoredStatus: restoreStatus,
+      message: `\u5916\u8BF7\u5B50\u5355\u5DF2\u5220\u9664\uFF0C\u7236\u8BA2\u5355 ${parentOrder.orderNumber} \u5DF2\u6062\u590D\u5230${STATUS_LABELS2[restoreStatus] || restoreStatus}`
     };
   })
 });
@@ -12604,6 +12670,7 @@ function safeParseJSON(raw) {
   throw new SyntaxError("AI JSON parse failed, first 200 chars: " + s.substring(0, 200));
 }
 function regexPreParse(text2) {
+  text2 = text2.replace(/\u00B7{2,}/g, "--");
   const results = {};
   const phoneMatch = text2.match(/1[3-9]\d{9}/);
   results.phone = phoneMatch ? phoneMatch[0] : null;
@@ -12941,6 +13008,12 @@ var smartPasteRouter = router({
 31. \u5F53\u591A\u4E2A\u5B50\u5355\u5171\u4EAB\u540C\u4E00\u4E2A\u5408\u5E76\u8BA1\u5212\u53F7\u65F6\uFF0C\u6BCF\u4E2A\u5B50\u5355\u7684\u4FE1\u606F\u5FC5\u987B\u72EC\u7ACB\u51C6\u786E\u586B\u5199
 32. \u4E0D\u8981\u5C06\u5408\u5E76\u8BA1\u5212\u53F7\u4E0B\u7B2C\u4E00\u4E2A\u5B50\u5355\u7684\u4FE1\u606F\u590D\u5236\u7ED9\u5176\u4ED6\u5B50\u5355
 33. \u5982\u679C\u67D0\u4E2A\u5B50\u5355\u7684\u67D0\u4E2A\u5B57\u6BB5\u65E0\u6CD5\u4ECE\u6587\u672C\u4E2D\u786E\u5B9A\uFF0C\u586B\u7A7A\u5B57\u7B26\u4E32
+
+\u53D1\u51FA\u4ED3\u5E93(warehouseName)\u72EC\u7ACB\u8BC6\u522B\u89C4\u5219\uFF08\u91CD\u8981\uFF09\uFF1A
+34. \u6BCF\u4E2A\u5B50\u5355\u53EF\u80FD\u6709\u4E0D\u540C\u7684\u53D1\u51FA\u4ED3\u5E93\uFF0C\u5FC5\u987B\u4E3A\u6BCF\u4E2A\u5B50\u5355\u72EC\u7ACB\u8BC6\u522BwarehouseName
+35. \u5982\u679C\u6587\u672C\u4E2D\u51FA\u73B0\u591A\u4E2A\u4ED3\u5E93\u540D\uFF08\u5982"\u6E05\u8FDC\u4ED3"\u548C"\u4F5B\u5C71\u4ED3"\uFF09\uFF0C\u5E94\u6839\u636E\u4E0A\u4E0B\u6587\u5C06\u4E0D\u540C\u4ED3\u5E93\u5206\u914D\u7ED9\u5BF9\u5E94\u7684\u5B50\u5355
+36. \u5982\u679C\u6587\u672C\u4E2D\u53EA\u6709\u4E00\u4E2A\u4ED3\u5E93\u540D\uFF0C\u5219\u6240\u6709\u5B50\u5355\u5171\u7528\u8BE5\u4ED3\u5E93
+37. \u4ED3\u5E93\u540D\u901A\u5E38\u51FA\u73B0\u5728"--"\u6216"---"\u5206\u9694\u7B26\u5DE6\u8FB9\uFF0C\u6216\u8005\u5728"XX\u4ED3"\u683C\u5F0F\u4E2D
 
 \u6B63\u5219\u9884\u63D0\u53D6\u7ED3\u679C\u4F9B\u53C2\u8003\uFF1A${JSON.stringify(regexResults)}`;
     try {
@@ -13419,6 +13492,7 @@ ${templateHint}
 3. remarks\uFF1A\u5FC5\u987B\u63D0\u53D6\u88C5\u5378\u987A\u5E8F\u8BF4\u660E\uFF08\u5982"\u5148\u88C5XX\u518D\u88C5XX"\uFF09\u548C\u8C03\u5EA6\u5B89\u6392\u8BF4\u660E\uFF08\u5982"\u517131.84\u5428\uFF0C\u8BF7\u5B89\u6392"\uFF09
 4. mergedPlanNumber\uFF1AP\u5F00\u5934+\u6570\u5B57\u7684\u7F16\u53F7\u5C31\u662F\u5408\u5E76\u8BA1\u5212\u53F7
 5. "--"\u6216"---"\u5206\u9694\u7B26\u5DE6\u8FB9\u662F\u4ED3\u5E93\uFF0C\u53F3\u8FB9\u662F\u6536\u8D27\u5730\u5740
+6. \u6BCF\u4E2A\u5B50\u5355\u53EF\u80FD\u6709\u4E0D\u540C\u7684\u53D1\u51FA\u4ED3\u5E93\uFF0C\u5FC5\u987B\u4E3A\u6BCF\u4E2A\u5B50\u5355\u72EC\u7ACB\u8BC6\u522BwarehouseName\uFF1B\u5982\u679C\u53EA\u6709\u4E00\u4E2A\u4ED3\u5E93\u5219\u6240\u6709\u5B50\u5355\u5171\u7528
 
 \u6B63\u5219\u9884\u63D0\u53D6\u7ED3\u679C\u4F9B\u53C2\u8003\uFF1A${JSON.stringify(regexResults)}`;
     try {

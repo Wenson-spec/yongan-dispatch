@@ -2,8 +2,8 @@
 **/node_modules
 .pnpm-store/
 
-# Build outputs
-dist/
+# Build outputs (注意：本仓库需要备份 dist 目录，不排除)
+# dist/
 build/
 *.dist
 
@@ -44,7 +44,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
-*.bak
+# *.bak  # 不排除 .bak 文件，备份时需要
 
 # Coverage directory used by tools like istanbul
 coverage/
