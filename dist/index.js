@@ -13136,18 +13136,23 @@ var smartPasteRouter = router({
           } else {
             order.cargoSpec = normalizeCargoSpec(order.cargoSpec);
           }
-          if ((!order.chargeableWeight || order.chargeableWeight.trim() === "") && regexResults.chargeableWeight) {
+          const cwStr = order.chargeableWeight != null ? String(order.chargeableWeight) : "";
+          if (!cwStr.trim() && regexResults.chargeableWeight) {
             order.chargeableWeight = regexResults.chargeableWeight;
+          } else {
+            order.chargeableWeight = cwStr;
           }
-          if (!order.palletCount || order.palletCount.trim() === "") {
+          const pcStr = order.palletCount != null ? String(order.palletCount) : "";
+          if (!pcStr.trim()) {
             order.palletCount = normalizeCount(regexResults.tuoInfo || input.text.match(/(?:共)?\s*(\d+|[零一二两三四五六七八九十]+)\s*托/)?.[0] || "");
           } else {
-            order.palletCount = normalizeCount(order.palletCount);
+            order.palletCount = normalizeCount(pcStr);
           }
-          if (!order.packageCount || order.packageCount.trim() === "") {
+          const pkgStr = order.packageCount != null ? String(order.packageCount) : "";
+          if (!pkgStr.trim()) {
             order.packageCount = normalizeCount(regexResults.jiaInfo || input.text.match(/(?:共)?\s*(\d+|[零一二两三四五六七八九十]+)\s*架/)?.[0] || "");
           } else {
-            order.packageCount = normalizeCount(order.packageCount);
+            order.packageCount = normalizeCount(pkgStr);
           }
           const slabShippingText = `${order.specialRequirements || ""} ${order.shippingNote || ""} ${order.remarks || ""} ${input.text}`;
           if (!order.largeSlabShippingRequired) {

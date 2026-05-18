@@ -276,7 +276,7 @@ export default function EntryStation() {
     isLoading: totalLoading,
     refetch: refetchTotal,
   } = trpc.order.list.useQuery(totalQueryInput, {
-    enabled: activeTab === "total",
+    enabled: true,
     refetchInterval: activeTab === "total" ? 15000 : false,
   });
 

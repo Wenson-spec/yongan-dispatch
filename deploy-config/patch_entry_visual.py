@@ -171,13 +171,28 @@ else:
     print("WARNING: PATCH 8 marker not found!")
 
 # ============================================================
+# PATCH 9: Fix "全部订单 0" - make order.list query always enabled
+# ============================================================
+PATCH9_OLD = 'enabled: n === "total",'
+PATCH9_NEW = 'enabled: !0,           '  # same length to preserve offsets
+if PATCH9_OLD in content:
+    content = content.replace(PATCH9_OLD, PATCH9_NEW, 1)
+    patches_applied.append("PATCH 9: order.list query always enabled (fix 全部订单 0)")
+else:
+    # Check if already patched
+    if 'enabled: !0,           ' in content:
+        patches_applied.append("PATCH 9: already applied")
+    else:
+        print("WARNING: PATCH 9 marker not found!")
+
+# ============================================================
 # Write output
 # ============================================================
 with open(OUTPUT, 'w') as f:
     f.write(content)
 
 print(f"\n{'='*60}")
-print(f"Patches applied: {len(patches_applied)}/{9}")
+print(f"Patches applied: {len(patches_applied)}/{10}")
 for p in patches_applied:
     print(f"  \u2713 {p}")
 print(f"Original size: {original_len}")
