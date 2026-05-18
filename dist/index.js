@@ -9185,6 +9185,7 @@ var orderRouter = router({
       receiverName: firstChild.receiverName || null,
       receiverPhone: firstChild.receiverPhone || null,
       customerPrice: totalCustomerPrice > 0 ? String(totalCustomerPrice) : null,
+      warehouseName: Array.from(new Set(childOrders.map((o) => o.warehouseName).filter(Boolean))).join("\u3001") || null,
       isMerged: true,
       remarks: input.remarks || `\u5408\u5E76\u8BA2\u5355\uFF0C\u5305\u542B ${childOrders.length} \u4E2A\u5B50\u8BA2\u5355`,
       orderDate: /* @__PURE__ */ new Date(),

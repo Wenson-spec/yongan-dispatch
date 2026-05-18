@@ -61,6 +61,7 @@ import {
   getCommandGroupGuide,
   getGroupCustomerCargoSummary,
   getGroupRouteSummary,
+  getGroupWarehouseSummary,
   getMergedChildDeleteLockReason,
   getMergedChildRollbackLockReason,
   isMergedChildOrder,
@@ -500,7 +501,9 @@ function ApprovalSummaryContent({
   const cargoName = isGroupSummary
     ? Array.from(new Set(summarySourceItems.map((currentItem) => currentItem.cargoName || currentItem.productName).filter(Boolean))).join("、") || "-"
     : referenceItem.cargoName || referenceItem.productName || "-";
-  const warehouseName = referenceItem.warehouseName || referenceItem.originCity || "-";
+  const warehouseName = isGroupSummary
+    ? getGroupWarehouseSummary(summarySourceItems)
+    : referenceItem.warehouseName || referenceItem.originCity || "-";
   const receivingNote = summarizeApprovalTextList(
     summarySourceItems.map((currentItem) => getApprovalReceivingSummary(currentItem)),
   );

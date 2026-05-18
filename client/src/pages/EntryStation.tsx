@@ -97,6 +97,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import {
   getMergedChildBusinessTypeLockReason,
   getMergedChildDeleteLockReason,
+  getGroupWarehouseSummary,
 } from "@/lib/commandGroupRules";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -800,6 +801,7 @@ export default function EntryStation() {
             {order.destinationCity || "?"}
           </div>
           <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+            {order.warehouseName ? <div>仓库：{order.warehouseName}</div> : null}
             <div>实际重量：{order.weight ? `${order.weight}t` : "-"}</div>
             {order.chargeableWeight ? <div>计费重量：{order.chargeableWeight}t</div> : null}
           </div>
@@ -960,6 +962,7 @@ export default function EntryStation() {
                                 {groupOrders[0]?.originCity || "-"} → {destinations.length <= 2 ? destinations.join("、") : `${destinations[0]} 等 ${destinations.length} 地`}
                               </div>
                               <div>客户：{groupOrders[0]?.customerName || "-"}；货物：{groupOrders[0]?.cargoName || "-"}</div>
+                              <div>发出仓库：{getGroupWarehouseSummary(groupOrders)}</div>
                             </div>
                           }
                           secondaryContent={(
@@ -1117,7 +1120,10 @@ export default function EntryStation() {
         </TableCell>
         <TableCell>
           <div className="text-sm">{order.originCity || "-"} → {order.destinationCity || "-"}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{order.weight ? `${order.weight}t` : "-"}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {order.warehouseName ? <span>仓库：{order.warehouseName} · </span> : null}
+            {order.weight ? `${order.weight}t` : "-"}
+          </div>
         </TableCell>
         <TableCell className="text-center">
           <Badge variant="outline" className={BIZ_BADGES[order.businessType] || ""}>
@@ -1263,6 +1269,7 @@ export default function EntryStation() {
                                 {leadOrder?.originCity || "-"} → {destinations.length <= 2 ? destinations.join("、") : `${destinations[0]}等${destinations.length}地`}
                               </div>
                               <div>客户：{leadOrder?.customerName || "-"}；货物：{leadOrder?.cargoName || "-"}</div>
+                              <div>发出仓库：{getGroupWarehouseSummary(groupOrders)}</div>
                             </div>
                           }
                           secondaryContent={(
